@@ -106,8 +106,11 @@ if [[ "${VERIFY:-0}" == 1 ]]; then
     vbad "amp firmware missing: /usr/lib/firmware/aw88399_acf.bin"
   fi
 
-  if lsmod | grep -qi aw88399; then
-    vok "AW88399 smart-amp module loaded: $(lsmod | awk '/aw88399/{print $1}' | tr '\n' ' ')"
+  # capture lsmod once and match via here-string: piping into 'grep -q' lets grep
+  # close the pipe early, SIGPIPE lsmod, and (under pipefail) falsely report "not found".
+  MODS_AUDIO="$(lsmod 2>/dev/null)"
+  if grep -qi aw88399 <<<"$MODS_AUDIO"; then
+    vok "AW88399 smart-amp module(s) loaded: $(awk '$1 ~ /aw883/{print $1}' <<<"$MODS_AUDIO" | tr '\n' ' ')"
   else
     vnote "no aw88399 module in lsmod (built-in, or not probed on this kernel)"
   fi
@@ -119,8 +122,9 @@ if [[ "${VERIFY:-0}" == 1 ]]; then
     vbad "no sound card in /proc/asound/cards; the codec is not being driven"
   fi
 
-  if command -v wpctl >/dev/null && wpctl status >/dev/null 2>&1; then
-    if wpctl status 2>/dev/null | grep -qi speaker; then
+  WPS=""
+  if command -v wpctl >/dev/null && WPS="$(wpctl status 2>/dev/null)"; then
+    if grep -qi speaker <<<"$WPS"; then
       vok "PipeWire Speaker sink present"
     else
       vnote "PipeWire is up but no 'Speaker' sink seen (check: wpctl status)"
