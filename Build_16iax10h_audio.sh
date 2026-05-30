@@ -139,6 +139,30 @@ if [[ "${VERIFY:-0}" == 1 ]]; then
     vnote "amp-calibration user service not found (systemctl --user)"
   fi
 
+  # default-boot config -- so the audio kernel boots without a manual menu pick
+  if [[ -f /etc/default/grub ]]; then
+    gdef="$(grep -E '^GRUB_DEFAULT=' /etc/default/grub | tail -n1)";     gdef="${gdef#GRUB_DEFAULT=}";     gdef="${gdef//\"/}"
+    gsav="$(grep -E '^GRUB_SAVEDEFAULT=' /etc/default/grub | tail -n1)"; gsav="${gsav#GRUB_SAVEDEFAULT=}"; gsav="${gsav//\"/}"
+    if [[ "$gdef" == "saved" && "$gsav" == "true" ]]; then
+      vok "GRUB remembers your boot choice (GRUB_DEFAULT=saved, GRUB_SAVEDEFAULT=true); boot the audio entry once to lock it as default"
+    elif [[ "$gdef" == "saved" ]]; then
+      vnote "GRUB_DEFAULT=saved but GRUB_SAVEDEFAULT!=true -- your audio-kernel pick won't persist (add GRUB_SAVEDEFAULT=true, then grub-mkconfig)"
+    elif [[ -n "$gdef" ]]; then
+      vnote "GRUB_DEFAULT=$gdef (fixed) -- confirm that's the 16IAX10H Audio entry, or use GRUB_DEFAULT=saved + GRUB_SAVEDEFAULT=true"
+    else
+      vnote "no GRUB_DEFAULT in /etc/default/grub (default = first menu entry, which may not be the audio kernel)"
+    fi
+  elif command -v bootctl >/dev/null 2>&1 || [[ -d /boot/loader ]]; then
+    bdef="$(grep -E '^default' /boot/loader/loader.conf 2>/dev/null | tail -n1 | awk '{print $2}')"
+    case "$bdef" in
+      *16iax10h-audio*) vok "systemd-boot default is the audio entry ($bdef)" ;;
+      "")               vnote "systemd-boot: no 'default' set in /boot/loader/loader.conf" ;;
+      *)                vnote "systemd-boot default '$bdef' is not the 16iax10h-audio entry" ;;
+    esac
+  else
+    vnote "no GRUB or systemd-boot config found to check the default-boot entry"
+  fi
+
   step "Result: ${vpass} passed, ${vfail} failed, ${vwarn} warning(s)"
   if [[ $vfail -eq 0 ]]; then
     ok "Audio setup looks correct. Play something to confirm the speakers."
