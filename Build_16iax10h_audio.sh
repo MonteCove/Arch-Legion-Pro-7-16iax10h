@@ -23,6 +23,7 @@
 #   ./build-16iax10h-audio.sh --force         # also rebuild/reinstall even if the
 #                                             # packages already exist or are installed
 #   ./build-16iax10h-audio.sh --skip-bootloader   # leave bootloader alone
+#   ./build-16iax10h-audio.sh --verify            # read-only post-reboot health check (no build)
 #   BUILD_ROOT=~/somewhere ./build-16iax10h-audio.sh
 #
 # Re-running without --force is always safe: the PKGBUILD and config are reset to
@@ -42,6 +43,7 @@ MARKER="16IAX10H-AUTO"
 
 FORCE=0
 SKIP_BOOTLOADER=0
+VERIFY=0
 
 # ---------------------------------------------------------------------------
 # Pretty output
@@ -60,10 +62,87 @@ for arg in "$@"; do
   case "$arg" in
     --force) FORCE=1 ;;
     --skip-bootloader) SKIP_BOOTLOADER=1 ;;
+    --verify|--test) VERIFY=1 ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $arg" ;;
   esac
 done
+
+# ---------------------------------------------------------------------------
+# Verify mode: read-only post-reboot health check (no build), then exit
+# ---------------------------------------------------------------------------
+if [[ "${VERIFY:-0}" == 1 ]]; then
+  set +e; trap - ERR
+  vpass=0; vfail=0; vwarn=0
+  vok()   { vpass=$((vpass+1)); printf '%s    [ ok ] %s%s\n' "$c_grn" "$1" "$c_reset"; }
+  vbad()  { vfail=$((vfail+1)); printf '%s    [FAIL] %s%s\n' "$c_red" "$1" "$c_reset"; }
+  vnote() { vwarn=$((vwarn+1)); printf '%s    [warn] %s%s\n' "$c_yel" "$1" "$c_reset"; }
+  step "Audio setup verification (read-only)"
+
+  kr="$(uname -r)"
+  if [[ "$kr" == *-16iax10h-audio-16iax10h ]]; then
+    vnote "running the OLD doubled-name kernel ($kr); reboot into the rebuilt clean one"
+  elif [[ "$kr" == *-16iax10h-audio ]]; then
+    vok "booted on the audio kernel: $kr"
+  else
+    vbad "NOT on the audio kernel (uname -r = $kr); reboot and pick the 16IAX10H Audio entry"
+  fi
+
+  if pacman -Q "$CUSTOM_PKGBASE" >/dev/null 2>&1; then
+    vok "package installed: $(pacman -Q "$CUSTOM_PKGBASE")"
+  else
+    vbad "package $CUSTOM_PKGBASE not installed"
+  fi
+
+  if grep -q "$DSP_PARAM" /proc/cmdline; then
+    vok "boot param active: $DSP_PARAM"
+  else
+    vbad "$DSP_PARAM missing from /proc/cmdline (the speakers need it)"
+  fi
+
+  if [[ -f /usr/lib/firmware/aw88399_acf.bin ]]; then
+    vok "amp firmware present: /usr/lib/firmware/aw88399_acf.bin"
+  else
+    vbad "amp firmware missing: /usr/lib/firmware/aw88399_acf.bin"
+  fi
+
+  if lsmod | grep -qi aw88399; then
+    vok "AW88399 smart-amp module loaded: $(lsmod | awk '/aw88399/{print $1}' | tr '\n' ' ')"
+  else
+    vnote "no aw88399 module in lsmod (built-in, or not probed on this kernel)"
+  fi
+
+  if grep -qE '^[[:space:]]*[0-9]+[[:space:]]+\[' /proc/asound/cards 2>/dev/null; then
+    vok "sound card detected (/proc/asound/cards):"
+    grep -E '^[[:space:]]*[0-9]+[[:space:]]+\[' /proc/asound/cards | sed "s/^/        /"
+  else
+    vbad "no sound card in /proc/asound/cards; the codec is not being driven"
+  fi
+
+  if command -v wpctl >/dev/null && wpctl status >/dev/null 2>&1; then
+    if wpctl status 2>/dev/null | grep -qi speaker; then
+      vok "PipeWire Speaker sink present"
+    else
+      vnote "PipeWire is up but no 'Speaker' sink seen (check: wpctl status)"
+    fi
+  else
+    vnote "could not query PipeWire (run inside your desktop session for the sink check)"
+  fi
+
+  if systemctl --user cat 16iax10h-calibrate.service >/dev/null 2>&1; then
+    vok "amp-calibration user service installed"
+  else
+    vnote "amp-calibration user service not found (systemctl --user)"
+  fi
+
+  step "Result: ${vpass} passed, ${vfail} failed, ${vwarn} warning(s)"
+  if [[ $vfail -eq 0 ]]; then
+    ok "Audio setup looks correct. Play something to confirm the speakers."
+    exit 0
+  fi
+  printf '%s!!! %d check(s) failed (see [FAIL] lines). If you just rebuilt, REBOOT into the 16IAX10H Audio entry then re-run: %s --verify%s\n' "$c_red" "$vfail" "$0" "$c_reset" >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Step 0: preflight
