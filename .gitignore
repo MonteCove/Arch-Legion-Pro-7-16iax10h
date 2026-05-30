@@ -1,0 +1,11 @@
+# build/runtime artifacts — never commit these
+*.log
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
+*.tmp
+*.pkg.tar.*
+.local/
+state/

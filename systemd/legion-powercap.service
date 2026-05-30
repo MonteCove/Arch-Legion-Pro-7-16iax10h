@@ -1,0 +1,13 @@
+[Unit]
+Description=Lift Legion Pro 7 16IAX10H sustained CPU power cap (Intel MMIO-RAPL PL1/PL2)
+Documentation=file:///home/monte/raise-power-cap.sh
+# Apply at boot and re-apply after resume from sleep/hibernate
+After=multi-user.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/monte/raise-power-cap.sh --no-load --pl1 120 --pl2 150
+
+[Install]
+WantedBy=multi-user.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
