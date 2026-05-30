@@ -70,22 +70,47 @@ Tjmax throttle is the hard backstop.
 
 ---
 
-## Quick start on a fresh install
+## Order to run (fresh install)
+
+The two builders are **independent** (audio = speakers/kernel; power = CPU power/fan/Fn-Q), but
+run them in this order: **audio → reboot into the audio kernel → power.** The power installer
+builds the `legion-laptop` module (via DKMS) for the kernel you're *running*, so you want to be on
+the audio kernel when you run it. With DKMS it self-heals for other kernels, so the order is for
+cleanliness, not a hard dependency.
 
 ```bash
-# 1. speakers (build + install the audio kernel, then reboot into it)
+# --- 1. Speakers: build + install the audio-patched kernel (+ its headers) ---
 ./Build_16iax10h_audio.sh
 
-# 2. power / fan / Fn-Q governor
+# --- 2. Make the audio kernel your default boot, then reboot into it ---
+grep -q '^GRUB_SAVEDEFAULT=' /etc/default/grub || echo 'GRUB_SAVEDEFAULT=true' | sudo tee -a /etc/default/grub
+sudo grub-mkconfig -o /boot/grub/grub.cfg
+sudo reboot                       # at the menu, pick "Arch Linux (16IAX10H Audio)" once
+                                  # (GRUB_DEFAULT=saved + SAVEDEFAULT=true makes that stick)
+
+# --- 3. Confirm you're on it, then verify audio ---
+uname -r                          # expect: ...-16iax10h-audio
+./Build_16iax10h_audio.sh --verify    # expect: N passed, 0 failed
+
+# --- 4. Power / fan / Fn-Q governor (DKMS-builds legion for the running kernel) ---
 ./Build_16iax10h_power.sh
-sudo reboot
-./Build_16iax10h_power.sh --verify   # expect: Result: N passed, 0 failed
+./Build_16iax10h_power.sh --verify    # expect: N passed, 0 failed
 ```
+
+After this, both maintain themselves:
+- **Audio** is a separate kernel package — rebuild it with `Build_16iax10h_audio.sh` when a newer
+  kernel lands (and a matching patch exists).
+- **Power's `legion-laptop` is a DKMS module**, so it auto-rebuilds whenever any kernel's headers
+  install (including future audio-kernel rebuilds). Re-run `--verify` to confirm after a rebuild.
+
+Re-run either script any time — both are idempotent and skip completed steps (`--force` redoes everything).
 
 ## Notes
 - `Build_16iax10h_power.sh` blacklists `ideapad_laptop` (frees the `VPC2004` ACPI device for
   `legion-laptop` and fixes a false Wi-Fi rfkill block); you lose ideapad's conservation-mode
   and some extra Fn keys.
 - Run the scripts as your **normal user** (they call `sudo` per step), not via `sudo`.
-- Both build scripts compile a kernel/module against the **running** kernel, so the matching
-  `*-headers` package must be installed.
+- Each kernel you want covered must have its matching `*-headers` package installed (the audio
+  build installs its own; for stock/zen, `sudo pacman -S --needed linux-headers`/`linux-zen-headers`).
+- `--verify` on either script is read-only and needs no `sudo` — handy as a quick post-reboot or
+  post-update health check.
