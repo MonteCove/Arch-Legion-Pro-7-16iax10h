@@ -6,16 +6,16 @@
 #
 # It performs, with dependency checks, error checking, logging and skip-on-done:
 #   1. preflight  - verify model (product 83F5 / BIOS Q7CN|SMCN) and kernel build support
-#   2. deps       - pacman -S --needed base-devel git lm_sensors stress-ng
+#   2. deps       - pacman -S --needed base-devel git lm_sensors stress-ng dkms
 #   3. source     - clone gluceri/legion-pro-7-16iax10h-linux
 #   4. patch      - bind legion-laptop to VPC2004 (instead of PNP0C09, which acpi-ec owns)
-#   5. build      - compile legion-laptop.ko against the running kernel
-#   6. install    - install the module + depmod
-#   7. configs    - modprobe options (enable_platformprofile), blacklists (lenovo-wmi, ideapad),
+#   5. dkms       - register legion-laptop with DKMS + build/install for the running kernel
+#                   (auto-rebuilds for every future kernel, so kernel changes never break it)
+#   6. configs    - modprobe options (enable_platformprofile), blacklists (lenovo-wmi, ideapad),
 #                   autoload (legion-laptop + coretemp)
-#   8. tool       - install the power governor to /usr/local/bin/legion-powercap
-#   9. service    - install + enable legion-powercapd.service (follows Fn-Q mode + thermal guard)
-#  10. activate   - bind legion + start the governor now (no reboot needed, best effort)
+#   7. tool       - install the power governor to /usr/local/bin/legion-powercap
+#   8. service    - install + enable legion-powercapd.service (follows Fn-Q mode + thermal guard)
+#   9. activate   - bind legion + start the governor now (no reboot needed, best effort)
 #
 # The governor maps the Fn-Q power mode to the Intel MMIO-RAPL CPU power limit
 # (quiet 45W / balanced 90W / performance 130W), throttles on temperature, and
@@ -102,10 +102,11 @@ preflight() {
   else
     log "machine matches Legion Pro 7 16IAX10H"
   fi
+  # DKMS needs the kernel headers/build tree to compile the module for this kernel
   if [ ! -d "$KBUILD" ]; then
-    die "no kernel headers for ${KREL} (missing ${KBUILD}). Install them and re-run: stock kernel -> 'sudo pacman -S --needed linux-headers'; custom kernel -> its matching '*-headers' package."
+    die "no kernel headers for ${KREL} (missing ${KBUILD}); DKMS needs them. Install and re-run: stock kernel -> 'sudo pacman -S --needed linux-headers'; custom kernel -> its matching '*-headers' package."
   fi
-  log "kernel build dir present: ${KBUILD}"
+  log "kernel headers present (DKMS will build against ${KBUILD})"
   if ls /sys/class/powercap/intel-rapl-mmio:* >/dev/null 2>&1; then
     log "MMIO-RAPL power-cap interface present"
   else
@@ -116,11 +117,12 @@ preflight() {
 
 deps() {
   step "Installing dependencies"
-  local pkgs="base-devel git lm_sensors stress-ng"
+  local pkgs="base-devel git lm_sensors stress-ng dkms"
   $SUDO pacman -S --needed --noconfirm $pkgs 2>&1 | tee -a "$LOGFILE"
   [ "${PIPESTATUS[0]}" -eq 0 ] || die "pacman failed to install: $pkgs"
   have make || die "make not found after installing base-devel"
   have git  || die "git not found after install"
+  have dkms || die "dkms not found after install"
   log "dependencies present"
 }
 
@@ -163,24 +165,44 @@ patch_source() {
   fi
 }
 
-build_module() {
-  step "Building legion-laptop.ko for ${KREL}"
-  # earlier root builds (sudo) leave root-owned .o/.cmd artifacts a user build can't overwrite;
-  # normalize ownership of the module dir, then clean stale artifacts before compiling.
-  $SUDO chown -R "$(id -u):$(id -g)" "$REPO_DIR/kernel_module" 2>/dev/null || true
-  make -C "$KBUILD" M="$REPO_DIR/kernel_module" clean >/dev/null 2>&1 || true
-  make -C "$KBUILD" M="$REPO_DIR/kernel_module" modules 2>&1 | tee -a "$LOGFILE"
-  [ "${PIPESTATUS[0]}" -eq 0 ] || die "module build failed (see $LOGFILE)"
-  [ -f "$REPO_DIR/kernel_module/legion-laptop.ko" ] || die "build reported success but legion-laptop.ko is missing"
-  log "built legion-laptop.ko ($(du -h "$REPO_DIR/kernel_module/legion-laptop.ko" 2>/dev/null | cut -f1))"
-}
+DKMS_PKG="LenovoLegionLinux"
+DKMS_VER="0.1.0"
+DKMS_SRC="/usr/src/${DKMS_PKG}-${DKMS_VER}"
 
-install_module() {
-  step "Installing legion-laptop.ko + depmod"
-  local dst="/lib/modules/${KREL}/kernel/drivers/platform/x86"
-  $SUDO install -Dm644 "$REPO_DIR/kernel_module/legion-laptop.ko" "$dst/legion-laptop.ko" || die "install of module failed"
-  $SUDO depmod -a "$KREL" || die "depmod failed"
-  log "installed -> $dst/legion-laptop.ko"
+dkms_install() {
+  step "Installing legion-laptop via DKMS (builds for ${KREL} + auto-rebuilds on future kernels)"
+
+  # stage ONLY the source files into /usr/src (no .o/.ko/.cmd artifacts) so DKMS builds clean.
+  # legion-laptop.c has no local includes; the Makefile only builds legion-laptop.o.
+  $SUDO rm -rf "$DKMS_SRC"
+  $SUDO install -d "$DKMS_SRC"
+  local sf
+  for sf in legion-laptop.c Makefile dkms.conf; do
+    [ -f "$REPO_DIR/kernel_module/$sf" ] || die "missing source file: kernel_module/$sf"
+    $SUDO install -m644 "$REPO_DIR/kernel_module/$sf" "$DKMS_SRC/$sf" || die "could not stage $sf"
+  done
+  # confirm the staged source carries the VPC2004 device-id (the quoted form -> the id table, not a comment)
+  grep -q '"VPC2004"' "$DKMS_SRC/legion-laptop.c" || die "staged source is not VPC2004-patched"
+
+  # clear any prior registration, then add/build/install for the running kernel
+  $SUDO dkms remove -m "$DKMS_PKG" -v "$DKMS_VER" --all >/dev/null 2>&1 || true
+  $SUDO dkms add -m "$DKMS_PKG" -v "$DKMS_VER" 2>&1 | tee -a "$LOGFILE" || true
+  # verify registration regardless of 'add' exit code (dkms add returns non-zero if already added)
+  [ -n "$($SUDO dkms status -m "$DKMS_PKG" -v "$DKMS_VER" 2>/dev/null)" ] \
+    || die "dkms add did not register $DKMS_PKG/$DKMS_VER (see $LOGFILE)"
+  $SUDO dkms build -m "$DKMS_PKG" -v "$DKMS_VER" -k "$KREL" --force 2>&1 | tee -a "$LOGFILE"
+  [ "${PIPESTATUS[0]}" -eq 0 ] || die "dkms build failed for $KREL (see $LOGFILE)"
+  $SUDO dkms install -m "$DKMS_PKG" -v "$DKMS_VER" -k "$KREL" --force 2>&1 | tee -a "$LOGFILE"
+  [ "${PIPESTATUS[0]}" -eq 0 ] || die "dkms install failed for $KREL (see $LOGFILE)"
+  $SUDO depmod -a "$KREL"
+
+  modinfo -k "$KREL" legion-laptop >/dev/null 2>&1 \
+    || die "DKMS reported success but 'modinfo -k $KREL legion-laptop' still fails"
+  log "DKMS OK -> $($SUDO dkms status -m "$DKMS_PKG" -v "$DKMS_VER" 2>/dev/null | head -1)"
+  # AUTOINSTALL=yes: a kernel/headers install normally triggers the dkms pacman hook to rebuild;
+  # custom-kernel rebuilds usually install the -headers package which does trigger it, but to be
+  # safe always confirm afterward with:  ./Build_16iax10h_power.sh --verify
+  log "registered with DKMS (AUTOINSTALL=yes); after any kernel rebuild, run --verify to confirm"
 }
 
 write_configs() {
@@ -861,6 +883,19 @@ do_verify() {
   # NOTE: read lsmod once into a var and match with a here-string. Piping into
   # 'grep -q' would let grep close the pipe early, SIGPIPE lsmod, and (under
   # 'set -o pipefail') report failure even when the module IS present.
+  # is the module even built for the RUNNING kernel? (catches "kernel rebuilt, module not rebuilt")
+  if modinfo -k "$(uname -r)" legion-laptop >/dev/null 2>&1; then
+    vok "legion-laptop built for the running kernel ($(uname -r))"
+  else
+    vfail "legion-laptop NOT built for $(uname -r) -- run: sudo dkms autoinstall  (or re-run this installer)"
+  fi
+  DKMS_STAT="$(dkms status -m LenovoLegionLinux 2>/dev/null || true)"
+  if [ -n "$DKMS_STAT" ]; then
+    vok "DKMS registered (auto-rebuilds on kernel changes): $(head -1 <<<"$DKMS_STAT")"
+  else
+    vwarn "legion not registered with DKMS -- it won't auto-rebuild on kernel updates (re-run the installer to fix)"
+  fi
+
   MODS="$(lsmod 2>/dev/null)"
   grep -q '^legion_laptop[[:space:]]'      <<<"$MODS" && vok "legion_laptop module loaded"            || vfail "legion_laptop module NOT loaded"
   [ -d /sys/bus/platform/drivers/legion/VPC2004:00 ]  && vok "legion bound to VPC2004:00"              || vfail "legion NOT bound to VPC2004:00"
@@ -928,6 +963,8 @@ summary() {
   log "Tool:    sudo $TOOL_DST  [ --status | --sweep | --daemon | --pl1 N --pl2 N | --restore ]"
   log "Service: systemctl status ${SERVICE_NAME%.service}   (logs: journalctl -u $SERVICE_NAME)"
   log "Install log: $LOGFILE"
+  log "DKMS built legion for ${KREL}; it auto-rebuilds on kernel installs. Other installed kernels"
+  log "  (linux/linux-zen) get it when their headers install, or run 'sudo dkms autoinstall'."
   warn "ideapad_laptop is blacklisted (frees VPC2004 + fixes the wifi rfkill); you lose ideapad conservation-mode/extra keys."
   log "REBOOT recommended -- then confirm everything with:  ./$(basename "$0") --verify"
 }
@@ -961,8 +998,7 @@ preflight
 deps
 get_source
 patch_source
-build_module
-install_module
+dkms_install
 write_configs
 install_tool
 install_service
