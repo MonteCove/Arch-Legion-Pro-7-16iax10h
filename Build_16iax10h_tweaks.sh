@@ -585,6 +585,22 @@ mod_display() {
     # apply binds to the running session (best-effort; needs an active Hyprland)
     command -v hyprctl >/dev/null 2>&1 && hyprctl reload >/dev/null 2>&1 || true
   fi
+
+  # mask the duplicate swaync.service: JaKooLit starts swaync via Hyprland
+  # 'exec-once', so the systemd user unit always fails with "already running"
+  # and shows up red in 'systemctl --user --failed'. Masking it (swaync keeps
+  # running from exec-once) makes the failed-unit list clean. Runs as this user.
+  if systemctl --user list-unit-files swaync.service >/dev/null 2>&1; then
+    if [ "$(systemctl --user is-enabled swaync.service 2>/dev/null)" != "masked" ]; then
+      systemctl --user reset-failed swaync.service >/dev/null 2>&1 || true
+      systemctl --user mask swaync.service >/dev/null 2>&1 \
+        && log "masked the duplicate swaync.service (swaync still runs via Hyprland exec-once)" \
+        || warn "could not mask swaync.service (no user session bus? it is cosmetic only)"
+    else
+      log "skip: swaync.service already masked"
+    fi
+  fi
+
   log "warm light: press Super+N or click the Waybar sun to toggle hyprsunset (now 3000K via the drop-in)"
 }
 
@@ -751,6 +767,11 @@ do_verify() {
       vok "overrides deployed & sourced (Super+L lock, hyprsunset 3000K)"
     else
       vwarn "Super+L / hyprsunset-temp drop-in not deployed (run: ./$(basename "$0") display)"
+    fi
+    if systemctl --user list-unit-files swaync.service >/dev/null 2>&1; then
+      [ "$(systemctl --user is-enabled swaync.service 2>/dev/null)" = "masked" ] \
+        && vok "swaync duplicate unit masked (clean --failed list)" \
+        || vnote "swaync.service not masked (cosmetic 'failed' unit; run: ./$(basename "$0") display)"
     fi
   else
     vnote "no $HYPR_DIR (not a Hyprland setup) -- display module N/A"

@@ -16,6 +16,35 @@ Two big things this hardware needs that mainline doesn't handle yet:
 
 ---
 
+## Prerequisites — do this FIRST (before any script)
+
+This setup assumes the **[JaKooLit Arch-Hyprland](https://github.com/JaKooLit/Arch-Hyprland)** dotfiles
+as the desktop base. Install that first, then make the changes below; the `Build_16iax10h_*` scripts
+build on top of it.
+
+1. **Install JaKooLit's Arch-Hyprland** and reboot into the Hyprland session.
+
+2. **Wire up the `awww` wallpaper daemon** (an OLED-friendly `swww` fork). Start it once, then
+   symlink it so JaKooLit's `swww`/`swww-daemon` wallpaper scripts use it:
+   ```bash
+   awww-daemon > /dev/null 2>&1 &
+   sudo ln -sf /usr/bin/awww /usr/bin/swww && sudo ln -sf /usr/bin/awww-daemon /usr/bin/swww-daemon
+   ```
+
+3. **Replace two JaKooLit configs with the versions in this repo** (under `dotfiles/hypr/configs/`):
+   ```bash
+   cp dotfiles/hypr/configs/SystemSettings.conf ~/.config/hypr/configs/SystemSettings.conf
+   cp dotfiles/hypr/configs/Keybinds.conf       ~/.config/hypr/configs/Keybinds.conf
+   hyprctl reload     # or relog
+   ```
+   (The `display` module of `Build_16iax10h_tweaks.sh` later layers a small `16iax10h-user.conf`
+   drop-in on top of these — `vrr = 0` for the OLED + `hyprsunset 3000K` — sourced *after* them so it
+   wins. It also masks the duplicate `swaync.service`.)
+
+Once JaKooLit is in and those three steps are done, continue with **"Order to run"** below.
+
+---
+
 ## Scripts
 
 ### `Build_16iax10h_all.sh`  ← start here
@@ -141,6 +170,9 @@ pwm curve (writing it can crash the EC / stop the fans on Q7CN).
 ---
 
 ## Order to run (fresh install)
+
+> **First** complete the **[Prerequisites](#prerequisites--do-this-first-before-any-script)** above
+> (install JaKooLit, wire up `awww`, drop in the two configs). Then run the builders.
 
 The two builders are **independent** (audio = speakers/kernel; power = CPU power/fan/Fn-Q), but
 run them in this order: **audio → reboot into the audio kernel → power → tweaks.** The power installer
