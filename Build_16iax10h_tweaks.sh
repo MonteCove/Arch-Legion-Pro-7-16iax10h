@@ -26,6 +26,7 @@
 #   gpu-offload    FEAT   nvidia-prime -> 'prime-run <app>' for per-app dGPU offload
 #   thunderbolt    FEAT   bolt (boltd) for Thunderbolt 4 device authorization
 #   firmware       FEAT   fwupd metadata refresh + fwupd-refresh.timer
+#   firewall       FEAT   nftables default-deny-inbound host firewall (Wi-Fi/DHCP/mDNS still work)
 #   display        FEAT   OLED screen-sleep (deploys dotfiles/hypr/hypridle.conf) +
 #                         hyprsunset warm light + a keybind/env drop-in (Super+L lock,
 #                         hyprsunset 3000K); installs hypridle/hyprlock/hyprsunset
@@ -52,8 +53,8 @@
 set -uo pipefail
 
 # ============================ module registry ============================
-ALL_MODULES="resume-audio resume-power cpu-governor snapshots btrfs-scrub zram suspend-deep video-accel gpu-offload thunderbolt firmware display nvidia-powerd battery-info spd5118"
-DEFAULT_MODULES="resume-audio resume-power cpu-governor snapshots btrfs-scrub zram suspend-deep video-accel gpu-offload thunderbolt firmware display nvidia-powerd battery-info"
+ALL_MODULES="resume-audio resume-power cpu-governor snapshots btrfs-scrub zram suspend-deep video-accel gpu-offload thunderbolt firmware firewall display nvidia-powerd battery-info spd5118"
+DEFAULT_MODULES="resume-audio resume-power cpu-governor snapshots btrfs-scrub zram suspend-deep video-accel gpu-offload thunderbolt firmware firewall display nvidia-powerd battery-info"
 
 usage() {
   # print the leading comment block (lines after the shebang, up to the first
@@ -201,44 +202,56 @@ preflight() {
 
 # --- HIGH: re-bind the AW88399 smart-amps after resume ---
 mod_resume_audio() {
-  step "[resume-audio] AW88399 amp DSP re-bind on resume (fixes speakers dying after suspend)"
+  step "[resume-audio] AW88399 rebind + re-calibrate on resume (fixes speakers dying after suspend)"
   local content
   content="$(cat <<'HOOK'
 #!/bin/sh
 # /usr/lib/systemd/system-sleep/aw88399-resume-rebind
-# Re-download the AW88399 DSP firmware after S3 resume by rebinding the amps.
+# Restore the AW88399 speakers after S3 resume, in TWO steps:
 #
-# Why: on deep (S3) resume the AW88399 DSP RAM loses the .acf firmware. The
-# kernel driver's system_resume only does a GPIO hw_reset and re-pushes the
-# DSP firmware in a way that then fails aw_dev_fw_crc_check ("dsp crc check
-# failed"), so the speakers go silent until reboot. Rebinding the i2c side
-# codec re-runs .probe -> aw88399_request_firmware_file, which re-downloads
-# /usr/lib/firmware/aw88399_acf.bin and re-registers the HDA component cleanly.
+#  1. Rebind the i2c side codec so .probe re-downloads /usr/lib/firmware/
+#     aw88399_acf.bin. The driver's own resume only GPIO-resets + re-pushes the
+#     DSP firmware in a way that fails aw_dev_fw_crc_check ("dsp crc check
+#     failed"), leaving the amps silent until reboot.
+#  2. Re-run the per-user calibration (UCM reload + PipeWire restart). The rebind
+#     alone leaves the amps BOUND BUT SILENT; the UCM engage is what makes them
+#     actually drive the speakers, and otherwise only runs at login.
 
+CAL=/usr/local/bin/16iax10h-calibrate.sh
 DRV=/sys/bus/i2c/drivers/aw88399-hda
 
 case "$1" in
     post)
-        [ -d "$DRV" ] || exit 0
-        devs=""
-        for l in "$DRV"/i2c-AWDZ8399:*; do
-            [ -e "$l" ] || continue
-            devs="$devs $(basename "$l")"
-        done
-        [ -n "$devs" ] || exit 0
+        # 1) rebind the amps (kernel side: re-download the DSP firmware)
+        if [ -d "$DRV" ]; then
+            devs=""
+            for l in "$DRV"/i2c-AWDZ8399:*; do
+                [ -e "$l" ] || continue
+                devs="$devs $(basename "$l")"
+            done
+            for d in $devs; do
+                [ -e "$DRV/$d" ] && echo "$d" > "$DRV/unbind" 2>/dev/null
+            done
+            sleep 0.5
+            for d in $devs; do
+                echo "$d" > "$DRV/bind" 2>/dev/null
+            done
+            for d in $devs; do
+                [ -e "$DRV/$d" ] || { sleep 0.3; echo "$d" > "$DRV/bind" 2>/dev/null; }
+            done
+        fi
 
-        for d in $devs; do
-            [ -e "$DRV/$d" ] && echo "$d" > "$DRV/unbind" 2>/dev/null
-        done
-        # brief settle so the i2c bus + GPIO reset complete before re-probe
-        sleep 0.5
-        for d in $devs; do
-            echo "$d" > "$DRV/bind" 2>/dev/null
-        done
-        # retry once for any amp whose bind did not take (i2c/GPIO not yet settled)
-        for d in $devs; do
-            [ -e "$DRV/$d" ] || { sleep 0.3; echo "$d" > "$DRV/bind" 2>/dev/null; }
-        done
+        # 2) re-engage the amps in each logged-in user's graphical session
+        #    (the rebind makes them bound; this makes them audible again)
+        if [ -x "$CAL" ]; then
+            sleep 0.5
+            for rt in /run/user/*; do
+                [ -S "$rt/bus" ] || continue
+                uid="${rt##*/}"
+                u="$(id -un "$uid" 2>/dev/null)" || continue
+                runuser -u "$u" -- env "XDG_RUNTIME_DIR=$rt" "DBUS_SESSION_BUS_ADDRESS=unix:path=$rt/bus" "$CAL" >/dev/null 2>&1 || true
+            done
+        fi
         ;;
 esac
 exit 0
@@ -480,6 +493,49 @@ mod_firmware() {
   log "note: Lenovo consumer/Legion BIOS is usually NOT on LVFS -- check the 83F5/16IAX10H support page by hand"
 }
 
+# --- FEAT: minimal host firewall (default-deny inbound) ---
+mod_firewall() {
+  step "[firewall] nftables host firewall (default-deny inbound; keeps Wi-Fi/DHCP/mDNS working)"
+  pkg_have nftables || pac_install nftables || { err "pacman failed installing nftables"; return 1; }
+  local content
+  content="$(cat <<'NFT'
+#!/usr/bin/nft -f
+# Minimal stateful host firewall for the Legion Pro 7 16IAX10H.
+# Default-deny inbound; allows established/related, loopback, ICMP (incl. IPv6
+# NDP -- required for IPv6), mDNS/.local, and DHCP client. Outbound unrestricted.
+# Add inbound app ports under the marked line (e.g. KDE Connect: 1714-1764).
+flush ruleset
+
+table inet filter {
+    chain input {
+        type filter hook input priority 0; policy drop;
+
+        ct state established,related accept
+        ct state invalid drop
+        iif "lo" accept
+
+        meta l4proto ipv6-icmp accept    # IPv6 NDP/RA -- required for IPv6
+        meta l4proto icmp accept         # ping / path-MTU
+
+        udp dport 546 accept             # DHCPv6 client
+        udp dport 68 accept              # DHCPv4 client
+        udp dport 5353 accept            # mDNS / .local discovery (avahi)
+        # --- add your inbound app ports here ---
+    }
+    chain forward { type filter hook forward priority 0; policy drop; }
+    chain output  { type filter hook output  priority 0; policy accept; }
+}
+NFT
+)"
+  write_file /etc/nftables.conf "$content" || return 1
+  # validate the ruleset BEFORE enabling -- never activate a broken firewall
+  $SUDO nft -c -f /etc/nftables.conf 2>&1 | tee -a "$LOGFILE"
+  [ "${PIPESTATUS[0]}" -eq 0 ] || { err "nftables ruleset failed validation -- NOT enabling; fix /etc/nftables.conf"; return 1; }
+  enable_now nftables.service || { err "could not enable nftables.service"; return 1; }
+  log "firewall active (default-deny inbound). Open ports: edit /etc/nftables.conf (vim) + 'sudo systemctl reload nftables'"
+  log "disable if it ever blocks something: sudo systemctl stop nftables  (or: sudo nft flush ruleset)"
+}
+
 # --- FEAT: OLED screen-sleep (hypridle) + warm light (hyprsunset) ---
 mod_display() {
   step "[display] OLED screen-sleep (hypridle) + warm-light (hyprsunset)"
@@ -569,17 +625,20 @@ mod_battery_info() {
     wear="$(awk -v a="$dfd" -v b="$fd" 'BEGIN{printf "%.1f", (1-a/b)*100}')"
   fi
   log "charge now: ${cap}%   cycle_count: ${cyc}   wear: ${wear}%"
-  if ls /sys/class/power_supply/BAT*/charge_control_end_threshold >/dev/null 2>&1; then
+  if [ -e /sys/bus/platform/devices/VPC2004:00/conservation_mode ]; then
+    local cm; cm="$(cat /sys/bus/platform/devices/VPC2004:00/conservation_mode 2>/dev/null)"
+    log "battery conservation IS available via the legion driver (conservation_mode=${cm}; 1=charging capped)."
+    log "  installed by Build_16iax10h_power.sh (DSDT-verified SBMC). Toggle:"
+    log "    echo 0 | sudo tee /sys/bus/platform/devices/VPC2004:00/conservation_mode   (charge to 100%)"
+    log "    echo 1 | sudo tee /sys/bus/platform/devices/VPC2004:00/conservation_mode   (cap again)"
+  elif ls /sys/class/power_supply/BAT*/charge_control_end_threshold >/dev/null 2>&1; then
     local thr; thr="$(cat /sys/class/power_supply/BAT*/charge_control_end_threshold 2>/dev/null | head -1)"
     log "charge-limit interface IS available (end threshold = ${thr}%). Cap it with e.g.:"
     log "  echo 80 | sudo tee /sys/class/power_supply/${bat##*/}/charge_control_end_threshold"
   else
-    warn "NO battery charge-limit interface on this machine (no charge_control_* / conservation_mode)."
-    log "  - the legion fork exposes only 'rapidcharge'; ideapad_laptop (which owns conservation_mode) is blacklisted by the power install."
-    log "  - there is NO verified-safe way to cap charging today: writing unknown EC/SBMC codes may be a silent no-op or risk the EC."
-    log "  - practical mitigation: avoid long stretches pinned at 100% on AC."
-    log "  - to investigate the firmware later (read-only):"
-    log "      sudo pacman -S --needed acpica && sudo cp /sys/firmware/acpi/tables/DSDT /tmp/dsdt.aml && iasl -d /tmp/dsdt.aml && grep -nE 'Method \\(SBMC|Method \\(GBMD' /tmp/dsdt.dsl"
+    warn "No battery charge-limit on this kernel/driver yet."
+    log "  - run Build_16iax10h_power.sh to add the legion 'conservation_mode' toggle (DSDT-verified SBMC)."
+    log "  - mitigation until then: avoid long stretches pinned at 100% on AC."
   fi
 }
 
@@ -658,6 +717,15 @@ do_verify() {
   pkg_have bolt && vok "bolt present (Thunderbolt authorization)" || vwarn "bolt not installed"
   systemctl is-enabled fwupd-refresh.timer >/dev/null 2>&1 && vok "fwupd-refresh.timer enabled" || vwarn "fwupd-refresh.timer not enabled"
 
+  # firewall
+  if systemctl is-active nftables >/dev/null 2>&1; then
+    vok "nftables firewall active (default-deny inbound)"
+  elif [ -f /etc/nftables.conf ] && grep -q 'policy drop' /etc/nftables.conf 2>/dev/null; then
+    vwarn "nftables.conf present but service inactive (run: sudo systemctl enable --now nftables)"
+  else
+    vnote "no host firewall (run: ./$(basename "$0") firewall)"
+  fi
+
   # nvidia-powerd state (informational)
   if unit_exists nvidia-powerd.service; then
     if systemctl is-masked nvidia-powerd.service >/dev/null 2>&1; then vnote "nvidia-powerd masked (Dynamic Boost unsupported on this BIOS)"
@@ -687,10 +755,14 @@ do_verify() {
   # spd5118 (opt-in)
   [ -f /etc/modprobe.d/blacklist-spd5118.conf ] && vnote "spd5118 blacklisted (opt-in; DIMM temp sensor silenced)"
 
-  # battery charge limit (informational)
-  ls /sys/class/power_supply/BAT*/charge_control_end_threshold >/dev/null 2>&1 \
-    && vnote "battery charge-limit interface available" \
-    || vnote "battery charge-limit NOT available on this machine (expected; see battery-info)"
+  # battery charge limit / conservation (informational)
+  if [ -e /sys/bus/platform/devices/VPC2004:00/conservation_mode ]; then
+    vnote "battery conservation available (legion conservation_mode=$(cat /sys/bus/platform/devices/VPC2004:00/conservation_mode 2>/dev/null); via Build_16iax10h_power.sh)"
+  elif ls /sys/class/power_supply/BAT*/charge_control_end_threshold >/dev/null 2>&1; then
+    vnote "battery charge-limit interface available"
+  else
+    vnote "battery charge-limit NOT available yet (run Build_16iax10h_power.sh for the legion conservation toggle)"
+  fi
 
   step "Result: ${VPASS} passed, ${VFAIL} failed, ${VWARN} warning(s)"
   if [ "$VFAIL" -eq 0 ]; then

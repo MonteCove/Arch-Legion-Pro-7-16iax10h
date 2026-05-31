@@ -18,6 +18,19 @@ Two big things this hardware needs that mainline doesn't handle yet:
 
 ## Scripts
 
+### `Build_16iax10h_all.sh`  ← start here
+One wrapper that installs (or verifies) **all three** installers in the correct order.
+
+```bash
+./Build_16iax10h_all.sh verify    # run all three --verify and aggregate (read-only, no sudo)
+./Build_16iax10h_all.sh install   # install audio -> power -> tweaks, in order
+```
+
+If you launch `install` from a **non-audio** kernel it builds the audio kernel, sets it as the GRUB
+default, then asks you to reboot into it and re-run `install` to finish power + tweaks (so the legion
+DKMS module builds against the audio kernel). On a machine already on the audio kernel it just runs all
+three idempotently. The three installers below can also be run individually.
+
 ### `Build_16iax10h_audio.sh`
 Builds an audio-patched kernel package from the Arch `linux` PKGBUILD: applies the
 16IAX10H sound patch, enables the AW88399 / SOF Kconfig options, sets a distinct
@@ -102,6 +115,9 @@ Modules:
 - **btrfs-scrub / zram / suspend-deep** — monthly scrub timer, grow zram toward RAM, pin `deep`/S3.
 - **video-accel / gpu-offload / thunderbolt / firmware** — `intel-media-driver` (iGPU HW decode),
   `nvidia-prime` (`prime-run`), `bolt`, the `fwupd-refresh` timer.
+- **firewall** — nftables default-deny-inbound host firewall (allows established/related, loopback,
+  ICMP/IPv6-NDP, mDNS, and DHCP, so Wi-Fi and `.local` discovery keep working). The ruleset is
+  validated with `nft -c` before the service is enabled, so a bad edit can't lock the box down.
 - **display** — OLED screen-sleep + warm light. Installs `hypridle`/`hyprlock`/`hyprsunset` and
   deploys `dotfiles/hypr/hypridle.conf` (dim 2.5m → panel **off** 3m → lock 5m → suspend 15m — true
   black protects OLED from burn-in). Also deploys `dotfiles/hypr/16iax10h-user.conf` (a sourced
