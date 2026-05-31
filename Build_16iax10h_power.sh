@@ -1001,7 +1001,7 @@ do_verify() {
 
   # functional: does the live MMIO PL1 match what the current Fn-Q mode should produce?
   if [ -n "$mmio" ]; then
-    local mode_name pl1 exp ac temp
+    local mode_name pl1 exp ac temp fwmax
     case "$prof" in
       low-power|quiet|cool) mode_name=quiet ;;
       performance|max-power) mode_name=performance ;;
@@ -1009,13 +1009,20 @@ do_verify() {
     esac
     pl1="$(awk '{printf "%.0f", $1/1000000}' "$mmio/constraint_0_power_limit_uw" 2>/dev/null || echo 0)"
     exp="$(mode_pl1 "$mode_name")"
+    # AC vs battery: the governor caps PL1 to the battery ceiling (90W) off-charger
     ac=1; for d in /sys/class/power_supply/*; do [ "$(cat "$d/type" 2>/dev/null)" = "Mains" ] && { ac="$(cat "$d/online" 2>/dev/null || echo 1)"; break; }; done
     [ "$ac" = 0 ] && [ "$exp" -gt 90 ] && exp=90
+    # the BIOS hard-clamps MMIO PL1 to constraint_0_max_power_uw (~55W on battery);
+    # a request above that silently clamps, so the live value can be < exp legitimately.
+    fwmax="$(awk '{printf "%.0f", $1/1000000}' "$mmio/constraint_0_max_power_uw" 2>/dev/null || echo 0)"
+    [ "${fwmax:-0}" -gt 0 ] && [ "$exp" -gt "$fwmax" ] && exp="$fwmax"
     temp="$(pkg_temp_c)"
     if [ "$pl1" = "$exp" ]; then
-      vok "governor functional: mode=${mode_name}$([ "$ac" = 0 ] && echo ' (battery)') -> PL1=${pl1}W (matches)"
+      vok "governor functional: mode=${mode_name}$([ "$ac" = 0 ] && echo ' (battery)') -> PL1=${pl1}W (matches$([ "$ac" = 0 ] && echo ', firmware-clamped'))"
     elif [ "$pl1" -lt "$exp" ] && [ "$temp" -ge 94 ]; then
       vok "governor functional: PL1=${pl1}W (< ${exp}W) but CPU at ${temp}C -- thermal guard active (expected)"
+    elif [ "$ac" = 0 ] && [ "$pl1" -gt 30 ] && [ "$pl1" -le "${fwmax:-55}" ]; then
+      vok "governor functional: PL1=${pl1}W on battery (BIOS clamps to ~${fwmax}W off-charger; full ${mode_name} watts apply on AC)"
     elif [ "$pl1" -gt 30 ]; then
       vwarn "PL1=${pl1}W != mode=${mode_name} expected ${exp}W (allow ~3s after a mode change; see journalctl -u $SERVICE_NAME)"
     else
