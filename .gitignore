@@ -9,3 +9,5 @@
 *.pkg.tar.*
 .local/
 state/
+*.bak
+/hypridle.conf
