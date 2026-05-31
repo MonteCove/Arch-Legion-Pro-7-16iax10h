@@ -9,6 +9,8 @@
 #   2. deps       - pacman -S --needed base-devel git lm_sensors stress-ng dkms
 #   3. source     - clone gluceri/legion-pro-7-16iax10h-linux
 #   4. patch      - bind legion-laptop to VPC2004 (instead of PNP0C09, which acpi-ec owns)
+#                   + add battery conservation_mode (caps charging; DSDT-verified SBMC 0x03/0x05)
+#                   + a legion-conservation.service that caps charging at boot (toggle anytime)
 #   5. dkms       - register legion-laptop with DKMS + build/install for the running kernel
 #                   (auto-rebuilds for every future kernel, so kernel changes never break it)
 #   6. configs    - modprobe options (enable_platformprofile), blacklists (lenovo-wmi, ideapad),
@@ -51,6 +53,10 @@ TOOL_DST="/usr/local/bin/legion-powercap"
 SERVICE_NAME="legion-powercapd.service"
 SERVICE_DST="/etc/systemd/system/${SERVICE_NAME}"
 OLD_ONESHOT="legion-powercap.service"
+CONS_SERVICE_NAME="legion-conservation.service"
+CONS_SERVICE_DST="/etc/systemd/system/${CONS_SERVICE_NAME}"
+LEGION_SYSFS="/sys/bus/platform/devices/VPC2004:00"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd || echo "$PWD")"
 EXPECT_PRODUCT="83F5"               # Legion Pro 7 16IAX10H
 EXPECT_BIOS_PREFIXES="Q7CN SMCN"    # Q7CN (Intel) / SMCN (AMD sibling)
 KREL="$(uname -r)"
@@ -163,6 +169,33 @@ patch_source() {
     rm -f "$f.tmp"
     die "patch did not take -- upstream source layout may have changed; inspect $f"
   fi
+}
+
+# Add a battery conservation_mode sysfs to the legion driver. The DSDT's SBMC
+# method takes 0x03 (BTSM=1, cap charging ~60-80%) / 0x05 (BTSM=0, off); status
+# is GBMD & 0x20. The driver already has the SBMC/GBMD plumbing for rapidcharge
+# but addresses them as "VPC0.SBMC" -- wrong once bound to VPC2004 (== VPC0), so
+# we also fix the path (which revives rapidcharge). Verified against this DSDT.
+patch_conservation() {
+  step "Adding battery conservation_mode to the legion driver (caps charging; revives rapidcharge)"
+  local f="$REPO_DIR/kernel_module/legion-laptop.c"
+  local blk="$SCRIPT_DIR/patches/legion-conservation-block.c"
+  [ -f "$f" ] || die "legion-laptop.c not found at $f"
+  if grep -q 'conservation_mode' "$f"; then
+    log "skip: conservation_mode already present"
+    return 0
+  fi
+  [ -f "$blk" ] || die "conservation patch block missing at $blk (repo incomplete?)"
+  # 1) correct the SBMC/GBMD relative path (methods are direct children of VPC2004=VPC0)
+  sed -i 's/"VPC0\.SBMC"/"SBMC"/; s/"VPC0\.GBMD"/"GBMD"/' "$f"
+  # 2) insert the conservation helpers + sysfs attr (mirrors rapidcharge) after its DEVICE_ATTR_RW
+  sed -i "/^static DEVICE_ATTR_RW(rapidcharge);\$/r $blk" "$f"
+  # 3) register the attribute in the same group as rapidcharge (flush-left is fine; C ignores indent)
+  sed -i '/&dev_attr_rapidcharge\.attr,/a &dev_attr_conservation_mode.attr,' "$f"
+  { grep -q 'DEVICE_ATTR_RW(conservation_mode)' "$f" && grep -q 'dev_attr_conservation_mode.attr' "$f" \
+      && ! grep -q '"VPC0\.SBMC"' "$f"; } \
+    || die "conservation patch did not fully apply -- inspect $f"
+  log "patched: conservation_mode added; SBMC/GBMD path fixed"
 }
 
 DKMS_PKG="LenovoLegionLinux"
@@ -810,6 +843,35 @@ EOF
   log "enabled $SERVICE_NAME (starts at boot)"
 }
 
+install_conservation_service() {
+  step "Installing battery conservation service ($CONS_SERVICE_NAME)"
+  # oneshot: caps charging at boot (echo 1). Stopping it (or 'echo 0') charges to 100%.
+  write_file "$CONS_SERVICE_DST" "$(cat <<EOF
+[Unit]
+Description=Legion battery conservation mode (limits max charge to protect the cell)
+After=multi-user.target
+ConditionPathExists=$LEGION_SYSFS/conservation_mode
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'echo 1 > $LEGION_SYSFS/conservation_mode'
+ExecStop=/bin/sh -c 'echo 0 > $LEGION_SYSFS/conservation_mode'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+)"
+  $SUDO systemctl daemon-reload || die "systemctl daemon-reload failed"
+  if [ "${LEGION_CONSERVATION:-1}" = 0 ]; then
+    $SUDO systemctl disable "$CONS_SERVICE_NAME" >/dev/null 2>&1 || true
+    log "conservation installed but left OFF (LEGION_CONSERVATION=0): enable with 'systemctl enable --now $CONS_SERVICE_NAME'"
+  else
+    $SUDO systemctl enable "$CONS_SERVICE_NAME" >/dev/null 2>&1 || die "could not enable $CONS_SERVICE_NAME"
+    log "enabled $CONS_SERVICE_NAME (charging capped at boot)"
+  fi
+}
+
 activate() {
   if [ "$SKIP_ACTIVATE" = 1 ]; then
     step "Skipping runtime activation (--skip-activate) -- everything applies at next boot"
@@ -836,6 +898,11 @@ activate() {
     warn "legion did not bind now -- a reboot (with ideapad blacklisted) binds it cleanly"
   fi
   $SUDO rfkill unblock all 2>/dev/null || true
+  if [ -e "$LEGION_SYSFS/conservation_mode" ] && [ "${LEGION_CONSERVATION:-1}" != 0 ]; then
+    echo 1 | $SUDO tee "$LEGION_SYSFS/conservation_mode" >/dev/null 2>&1 \
+      && log "battery conservation ON now (charging capped)" \
+      || warn "could not set conservation now (applies at boot via $CONS_SERVICE_NAME)"
+  fi
   if $SUDO systemctl restart "$SERVICE_NAME" 2>/dev/null; then
     sleep 1
     if $SUDO systemctl is-active "$SERVICE_NAME" >/dev/null 2>&1; then
@@ -875,7 +942,7 @@ do_verify() {
   VPASS=0; VFAIL=0; VWARN=0
   step "Verification (read-only)"
 
-  local prod bios prof="" pm mmio="" d MODS
+  local prod bios prof="" pm mmio="" d MODS cm
   prod="$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)"
   bios="$(cat /sys/class/dmi/id/bios_version 2>/dev/null || true)"
   case "$bios" in Q7CN*|SMCN*) vok "machine: ${prod} / ${bios}" ;; *) vwarn "machine: ${prod} / ${bios} (not Q7CN/SMCN)" ;; esac
@@ -923,6 +990,15 @@ do_verify() {
     [ -f "$d" ] && vok "config present: $d" || vfail "config missing: $d"
   done
 
+  # battery conservation (cap charging) -- driver patch + service
+  if [ -e "$LEGION_SYSFS/conservation_mode" ]; then
+    cm="$(cat "$LEGION_SYSFS/conservation_mode" 2>/dev/null || echo '?')"
+    vok "battery conservation_mode present (now=${cm}; 1=charging capped)"
+  else
+    vwarn "conservation_mode sysfs missing (driver not rebuilt with the patch? re-run the installer)"
+  fi
+  systemctl is-enabled "$CONS_SERVICE_NAME" >/dev/null 2>&1 && vok "conservation service enabled (caps at boot)" || vwarn "conservation service not enabled"
+
   # functional: does the live MMIO PL1 match what the current Fn-Q mode should produce?
   if [ -n "$mmio" ]; then
     local mode_name pl1 exp ac temp
@@ -965,7 +1041,11 @@ summary() {
   log "Install log: $LOGFILE"
   log "DKMS built legion for ${KREL}; it auto-rebuilds on kernel installs. Other installed kernels"
   log "  (linux/linux-zen) get it when their headers install, or run 'sudo dkms autoinstall'."
-  warn "ideapad_laptop is blacklisted (frees VPC2004 + fixes the wifi rfkill); you lose ideapad conservation-mode/extra keys."
+  log "Battery: conservation_mode caps charging (~60-80%) to protect the cell (on by default)."
+  log "  charge to 100% once:  echo 0 | sudo tee $LEGION_SYSFS/conservation_mode"
+  log "  cap again:            echo 1 | sudo tee $LEGION_SYSFS/conservation_mode"
+  log "  keep 100% across reboots: sudo systemctl disable --now $CONS_SERVICE_NAME"
+  warn "ideapad_laptop is blacklisted (frees VPC2004 + fixes the wifi rfkill); you lose a few extra Fn keys (battery conservation is now provided by the legion driver patch)."
   log "REBOOT recommended -- then confirm everything with:  ./$(basename "$0") --verify"
 }
 
@@ -998,10 +1078,12 @@ preflight
 deps
 get_source
 patch_source
+patch_conservation
 dkms_install
 write_configs
 install_tool
 install_service
+install_conservation_service
 activate
 do_verify || true
 summary

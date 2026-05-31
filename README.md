@@ -62,6 +62,20 @@ Governor mapping (Fn-Q mode → sustained PL1): **quiet 45 W / balanced 90 W / p
 recovers ≤ 88 °C; on **battery** it caps to 90 W regardless of mode. The CPU's ~105 °C
 Tjmax throttle is the hard backstop.
 
+**Battery conservation (charge limit):** the installer also patches the legion driver to add a
+`conservation_mode` sysfs and installs `legion-conservation.service`, which caps charging
+(~60-80 %) at boot to protect the cell. DSDT-verified: `SBMC 0x03` → on / `0x05` → off, status
+`GBMD & 0x20` (patch in `patches/legion-conservation-block.c`). It also corrects the driver's
+`SBMC`/`GBMD` ACPI path (broken by the `VPC2004` rebind), which revives `rapidcharge`. Toggle:
+
+```bash
+echo 0 | sudo tee /sys/bus/platform/devices/VPC2004:00/conservation_mode   # charge to 100% once
+echo 1 | sudo tee /sys/bus/platform/devices/VPC2004:00/conservation_mode   # cap again
+sudo systemctl disable --now legion-conservation.service                   # keep 100% across reboots
+```
+
+Set `LEGION_CONSERVATION=0 ./Build_16iax10h_power.sh` to install it but leave the cap off by default.
+
 ### `Build_16iax10h_tweaks.sh`
 One idempotent, modular **"fixes & features"** installer for everything an audit turned up
 *after* the audio + power basics. It runs a set of named **modules** (with no args it runs the
