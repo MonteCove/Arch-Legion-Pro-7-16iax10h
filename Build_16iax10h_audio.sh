@@ -50,11 +50,13 @@ VERIFY=0
 # ---------------------------------------------------------------------------
 c_reset=$'\033[0m'; c_blue=$'\033[1;34m'; c_grn=$'\033[1;32m'
 c_yel=$'\033[1;33m'; c_red=$'\033[1;31m'; c_dim=$'\033[2m'
-step() { printf '%s\n==> %s%s\n' "$c_blue" "$1" "$c_reset"; }
-ok()   { printf '%s    %s%s\n' "$c_grn" "$1" "$c_reset"; }
-skip() { printf '%s    skip: %s%s\n' "$c_dim" "$1" "$c_reset"; }
-warn() { printf '%s    warning: %s%s\n' "$c_yel" "$1" "$c_reset"; }
-die()  { printf '%s!!! %s%s\n' "$c_red" "$1" "$c_reset" >&2; exit 1; }
+# Output style matched to Build_16iax10h_power.sh / _tweaks.sh: magenta '==>',
+# no leading blank line, and only the marker is coloured (not the whole line).
+step() { printf '\033[1;35m==>\033[0m %s\n' "$1"; }
+ok()   { printf '    %s\n' "$1"; }
+skip() { printf '    skip: %s\n' "$1"; }
+warn() { printf '    \033[1;33mwarning:\033[0m %s\n' "$1"; }
+die()  { printf '\033[1;31m!!!\033[0m %s\n' "$1" >&2; exit 1; }
 
 trap 'die "failed at line $LINENO. Nothing destructive was forced; fix the issue and re-run (steps already done will be skipped)."' ERR
 
@@ -74,9 +76,9 @@ done
 if [[ "${VERIFY:-0}" == 1 ]]; then
   set +e; trap - ERR
   vpass=0; vfail=0; vwarn=0
-  vok()   { vpass=$((vpass+1)); printf '%s    [ ok ] %s%s\n' "$c_grn" "$1" "$c_reset"; }
-  vbad()  { vfail=$((vfail+1)); printf '%s    [FAIL] %s%s\n' "$c_red" "$1" "$c_reset"; }
-  vnote() { vwarn=$((vwarn+1)); printf '%s    [warn] %s%s\n' "$c_yel" "$1" "$c_reset"; }
+  vok()   { vpass=$((vpass+1)); printf '    \033[0;32m[ ok ]\033[0m %s\n' "$1"; }
+  vbad()  { vfail=$((vfail+1)); printf '    \033[0;31m[FAIL]\033[0m %s\n' "$1"; }
+  vnote() { vwarn=$((vwarn+1)); printf '    \033[1;33m[warn]\033[0m %s\n' "$1"; }
   step "Audio setup verification (read-only)"
 
   kr="$(uname -r)"
@@ -168,7 +170,7 @@ if [[ "${VERIFY:-0}" == 1 ]]; then
     ok "Audio setup looks correct. Play something to confirm the speakers."
     exit 0
   fi
-  printf '%s!!! %d check(s) failed (see [FAIL] lines). If you just rebuilt, REBOOT into the 16IAX10H Audio entry then re-run: %s --verify%s\n' "$c_red" "$vfail" "$0" "$c_reset" >&2
+  printf '\033[1;31m!!!\033[0m %d check(s) failed (see [FAIL] lines). If you just rebuilt, REBOOT into the 16IAX10H Audio entry then re-run: %s --verify\n' "$vfail" "$0" >&2
   exit 1
 fi
 
