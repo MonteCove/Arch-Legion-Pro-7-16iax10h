@@ -26,6 +26,8 @@
 #   gpu-offload    FEAT   nvidia-prime -> 'prime-run <app>' for per-app dGPU offload
 #   thunderbolt    FEAT   bolt (boltd) for Thunderbolt 4 device authorization
 #   firmware       FEAT   fwupd metadata refresh + fwupd-refresh.timer
+#   display        FEAT   OLED screen-sleep (deploys dotfiles/hypr/hypridle.conf) +
+#                         hyprsunset warm light; installs hypridle/hyprlock/hyprsunset
 #   nvidia-powerd  FEAT   NVIDIA Dynamic Boost (auto-reverts if BIOS lacks NVPCF)
 #   battery-info   INFO   report battery wear + charge-limit availability (READ-ONLY)
 #   spd5118        OPT    blacklist the redundant DIMM temp sensor (silences a benign
@@ -49,8 +51,8 @@
 set -uo pipefail
 
 # ============================ module registry ============================
-ALL_MODULES="resume-audio resume-power cpu-governor snapshots btrfs-scrub zram suspend-deep video-accel gpu-offload thunderbolt firmware nvidia-powerd battery-info spd5118"
-DEFAULT_MODULES="resume-audio resume-power cpu-governor snapshots btrfs-scrub zram suspend-deep video-accel gpu-offload thunderbolt firmware nvidia-powerd battery-info"
+ALL_MODULES="resume-audio resume-power cpu-governor snapshots btrfs-scrub zram suspend-deep video-accel gpu-offload thunderbolt firmware display nvidia-powerd battery-info spd5118"
+DEFAULT_MODULES="resume-audio resume-power cpu-governor snapshots btrfs-scrub zram suspend-deep video-accel gpu-offload thunderbolt firmware display nvidia-powerd battery-info"
 
 usage() {
   # print the leading comment block (lines after the shebang, up to the first
@@ -72,6 +74,11 @@ SUDO="sudo"
 EXPECT_PRODUCT="83F5"               # Legion Pro 7 16IAX10H
 EXPECT_BIOS_PREFIXES="Q7CN SMCN"    # Q7CN (Intel) / SMCN (AMD sibling)
 KREL="$(uname -r)"
+
+# directory of this script (= the repo), so modules can deploy repo-stored configs
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd || echo "$PWD")"
+HYPR_DIR="$HOME/.config/hypr"
+HYPRIDLE_SRC="$SCRIPT_DIR/dotfiles/hypr/hypridle.conf"
 
 SLEEPDIR="/usr/lib/systemd/system-sleep"
 CPUPOWER_CONF="/etc/default/cpupower-service.conf"
@@ -142,6 +149,30 @@ install_sleep_hook() {
 regen_grub() {
   $SUDO grub-mkconfig -o "$GRUB_CFG" 2>&1 | tee -a "$LOGFILE"
   [ "${PIPESTATUS[0]}" -eq 0 ] || warn "grub-mkconfig returned non-zero (check the log)"
+}
+
+# restart hypridle so a new config applies now (best-effort; needs the running
+# Hyprland session). No-op with a note if hypridle isn't running.
+reload_hypridle() {
+  local pid kv
+  pid="$(pgrep -x hypridle | head -1 || true)"
+  if [ -z "$pid" ]; then
+    log "hypridle not running now; the new config applies at next login (JaKooLit exec-once)"
+    return 0
+  fi
+  # import the graphical-session env from the running process (covers running outside the session)
+  while IFS= read -r -d '' kv; do
+    case "$kv" in WAYLAND_DISPLAY=*|HYPRLAND_INSTANCE_SIGNATURE=*|XDG_RUNTIME_DIR=*|DBUS_SESSION_BUS_ADDRESS=*) export "$kv" ;; esac
+  done < "/proc/$pid/environ" 2>/dev/null || true
+  kill "$pid" 2>/dev/null || true
+  sleep 0.4
+  setsid hypridle >/dev/null 2>&1 &
+  sleep 1
+  if pgrep -x hypridle >/dev/null 2>&1; then
+    log "reloaded hypridle (pid $(pgrep -x hypridle | head -1))"
+  else
+    warn "hypridle did not relaunch from here; it will start at next login"
+  fi
 }
 
 # ============================ preflight ============================
@@ -447,6 +478,37 @@ mod_firmware() {
   log "note: Lenovo consumer/Legion BIOS is usually NOT on LVFS -- check the 83F5/16IAX10H support page by hand"
 }
 
+# --- FEAT: OLED screen-sleep (hypridle) + warm light (hyprsunset) ---
+mod_display() {
+  step "[display] OLED screen-sleep (hypridle) + warm-light (hyprsunset)"
+  # only meaningful on a Hyprland desktop
+  if [ ! -d "$HYPR_DIR" ] && ! pkg_have hyprland; then
+    warn "no $HYPR_DIR and hyprland not installed -- skipping display module"
+    return 0
+  fi
+  # packages: hypridle (idle daemon), hyprlock (lock), brightnessctl (dim), hyprsunset (warm light)
+  pac_install hypridle hyprlock brightnessctl hyprsunset || { err "pacman failed installing display tools"; return 1; }
+
+  # deploy the repo's OLED hypridle.conf (dim -> screen off -> lock -> suspend@15m)
+  local dst="$HYPR_DIR/hypridle.conf"
+  if [ ! -f "$HYPRIDLE_SRC" ]; then
+    warn "repo config missing: $HYPRIDLE_SRC -- skipping hypridle deploy"
+  elif [ ! -d "$HYPR_DIR" ]; then
+    warn "$HYPR_DIR does not exist (install your Hyprland dots first) -- skipping hypridle deploy"
+  elif [ "$FORCE" != 1 ] && [ -f "$dst" ] && cmp -s "$HYPRIDLE_SRC" "$dst"; then
+    log "skip: hypridle.conf already matches the repo version"
+  else
+    if [ -f "$dst" ]; then
+      if [ ! -f "$dst.bak" ]; then cp "$dst" "$dst.bak" && log "backed up original -> $dst.bak"
+      else cp "$dst" "$dst.prev" 2>/dev/null && log "saved current -> $dst.prev"; fi
+    fi
+    cp "$HYPRIDLE_SRC" "$dst" || { err "could not write $dst"; return 1; }
+    log "deployed OLED hypridle.conf -> $dst (dim 2.5m / screen-off 3m / lock 5m / suspend 15m)"
+    reload_hypridle
+  fi
+  log "warm light: press Super+N or click the Waybar sun to toggle hyprsunset (JaKooLit, default 4500K)"
+}
+
 # --- FEAT (speculative): NVIDIA Dynamic Boost ---
 mod_nvidia_powerd() {
   step "[nvidia-powerd] NVIDIA Dynamic Boost (auto-reverts if BIOS lacks NVPCF on this SKU)"
@@ -582,6 +644,19 @@ do_verify() {
     elif systemctl is-active nvidia-powerd.service >/dev/null 2>&1; then vok "nvidia-powerd active (verify under load: nvidia-smi -q -d POWER)"
     else vnote "nvidia-powerd present but inactive"
     fi
+  fi
+
+  # display / OLED (hypridle + hyprsunset)
+  if [ -d "$HYPR_DIR" ]; then
+    pkg_have hypridle && vok "hypridle present (OLED screen-sleep)" || vwarn "hypridle not installed"
+    pkg_have hyprsunset && vok "hyprsunset present (warm light: Super+N)" || vwarn "hyprsunset not installed (warm light won't work)"
+    if [ -f "$HYPRIDLE_SRC" ] && [ -f "$HYPR_DIR/hypridle.conf" ]; then
+      cmp -s "$HYPRIDLE_SRC" "$HYPR_DIR/hypridle.conf" \
+        && vok "hypridle.conf matches the repo (dim/screen-off/lock/suspend)" \
+        || vwarn "hypridle.conf differs from the repo (run: ./$(basename "$0") display, or re-sync your edit into the repo)"
+    fi
+  else
+    vnote "no $HYPR_DIR (not a Hyprland setup) -- display module N/A"
   fi
 
   # spd5118 (opt-in)
