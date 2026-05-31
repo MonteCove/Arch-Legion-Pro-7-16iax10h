@@ -90,9 +90,10 @@ Modules:
   `nvidia-prime` (`prime-run`), `bolt`, the `fwupd-refresh` timer.
 - **display** — OLED screen-sleep + warm light. Installs `hypridle`/`hyprlock`/`hyprsunset` and
   deploys `dotfiles/hypr/hypridle.conf` (dim 2.5m → panel **off** 3m → lock 5m → suspend 15m — true
-  black protects OLED from burn-in). Warm light toggles with **Super+N** / the Waybar sun (JaKooLit
-  integration; this module just installs the `hyprsunset` binary it needs). Re-deploys the repo copy,
-  backing up the existing one — so edit the repo copy (or re-sync) and the repo stays canonical.
+  black protects OLED from burn-in). Also deploys `dotfiles/hypr/16iax10h-user.conf` (a sourced
+  drop-in) for **Super+L → lock** and **hyprsunset 3000K**, and toggles warm light with **Super+N** /
+  the Waybar sun. Re-deploys the repo copies, backing up the originals — so edit the repo copy (or
+  re-sync) and the repo stays canonical.
 - **nvidia-powerd** — NVIDIA Dynamic Boost; **auto-masks itself** if the BIOS lacks NVPCF.
 - **battery-info** *(read-only)* — reports battery wear + charge-limit availability.
 - **spd5118** *(opt-in)* — blacklist the redundant DIMM temp sensor to silence a benign resume error.

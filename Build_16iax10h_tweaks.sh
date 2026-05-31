@@ -27,7 +27,8 @@
 #   thunderbolt    FEAT   bolt (boltd) for Thunderbolt 4 device authorization
 #   firmware       FEAT   fwupd metadata refresh + fwupd-refresh.timer
 #   display        FEAT   OLED screen-sleep (deploys dotfiles/hypr/hypridle.conf) +
-#                         hyprsunset warm light; installs hypridle/hyprlock/hyprsunset
+#                         hyprsunset warm light + a keybind/env drop-in (Super+L lock,
+#                         hyprsunset 3000K); installs hypridle/hyprlock/hyprsunset
 #   nvidia-powerd  FEAT   NVIDIA Dynamic Boost (auto-reverts if BIOS lacks NVPCF)
 #   battery-info   INFO   report battery wear + charge-limit availability (READ-ONLY)
 #   spd5118        OPT    blacklist the redundant DIMM temp sensor (silences a benign
@@ -79,6 +80,7 @@ KREL="$(uname -r)"
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd || echo "$PWD")"
 HYPR_DIR="$HOME/.config/hypr"
 HYPRIDLE_SRC="$SCRIPT_DIR/dotfiles/hypr/hypridle.conf"
+HYPRUSER_SRC="$SCRIPT_DIR/dotfiles/hypr/16iax10h-user.conf"   # Super+L lock + hyprsunset temp
 
 SLEEPDIR="/usr/lib/systemd/system-sleep"
 CPUPOWER_CONF="/etc/default/cpupower-service.conf"
@@ -506,7 +508,25 @@ mod_display() {
     log "deployed OLED hypridle.conf -> $dst (dim 2.5m / screen-off 3m / lock 5m / suspend 15m)"
     reload_hypridle
   fi
-  log "warm light: press Super+N or click the Waybar sun to toggle hyprsunset (JaKooLit, default 4500K)"
+
+  # deploy the keybind/env drop-in (Super+L -> lock; hyprsunset 3000K) + ensure it is sourced
+  local udrop="$HYPR_DIR/16iax10h-user.conf" ukb="$HYPR_DIR/UserConfigs/UserKeybinds.conf"
+  if [ ! -f "$HYPRUSER_SRC" ]; then
+    warn "repo drop-in missing: $HYPRUSER_SRC -- skipping overrides"
+  elif [ -d "$HYPR_DIR" ]; then
+    if [ "$FORCE" = 1 ] || [ ! -f "$udrop" ] || ! cmp -s "$HYPRUSER_SRC" "$udrop"; then
+      cp "$HYPRUSER_SRC" "$udrop" && log "deployed overrides -> $udrop (Super+L lock, hyprsunset 3000K)"
+    else
+      log "skip: 16iax10h-user.conf already matches the repo version"
+    fi
+    if [ -f "$ukb" ] && ! grep -qF '16iax10h-user.conf' "$ukb"; then
+      printf '\n# 16IAX10H overrides (managed by Build_16iax10h_tweaks.sh)\nsource = %s/16iax10h-user.conf\n' "$HYPR_DIR" >> "$ukb" \
+        && log "sourced the drop-in from $ukb"
+    fi
+    # apply binds to the running session (best-effort; needs an active Hyprland)
+    command -v hyprctl >/dev/null 2>&1 && hyprctl reload >/dev/null 2>&1 || true
+  fi
+  log "warm light: press Super+N or click the Waybar sun to toggle hyprsunset (now 3000K via the drop-in)"
 }
 
 # --- FEAT (speculative): NVIDIA Dynamic Boost ---
@@ -654,6 +674,11 @@ do_verify() {
       cmp -s "$HYPRIDLE_SRC" "$HYPR_DIR/hypridle.conf" \
         && vok "hypridle.conf matches the repo (dim/screen-off/lock/suspend)" \
         || vwarn "hypridle.conf differs from the repo (run: ./$(basename "$0") display, or re-sync your edit into the repo)"
+    fi
+    if [ -f "$HYPR_DIR/16iax10h-user.conf" ] && grep -qF '16iax10h-user.conf' "$HYPR_DIR/UserConfigs/UserKeybinds.conf" 2>/dev/null; then
+      vok "overrides deployed & sourced (Super+L lock, hyprsunset 3000K)"
+    else
+      vwarn "Super+L / hyprsunset-temp drop-in not deployed (run: ./$(basename "$0") display)"
     fi
   else
     vnote "no $HYPR_DIR (not a Hyprland setup) -- display module N/A"
