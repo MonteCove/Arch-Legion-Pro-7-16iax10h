@@ -532,8 +532,11 @@ NFT
   $SUDO nft -c -f /etc/nftables.conf 2>&1 | tee -a "$LOGFILE"
   [ "${PIPESTATUS[0]}" -eq 0 ] || { err "nftables ruleset failed validation -- NOT enabling; fix /etc/nftables.conf"; return 1; }
   enable_now nftables.service || { err "could not enable nftables.service"; return 1; }
-  log "firewall active (default-deny inbound). Open ports: edit /etc/nftables.conf (vim) + 'sudo systemctl reload nftables'"
-  log "disable if it ever blocks something: sudo systemctl stop nftables  (or: sudo nft flush ruleset)"
+  # NB: nftables.service is a oneshot -- it loads the ruleset then exits, so it shows
+  # 'inactive (dead)' in status even though the firewall IS loaded and re-loads each boot.
+  log "firewall ruleset loaded + enabled at boot (default-deny inbound)."
+  log "  open ports: edit /etc/nftables.conf (vim), then reapply: sudo nft -f /etc/nftables.conf"
+  log "  disable if it ever blocks something: sudo nft flush ruleset  (and 'sudo systemctl disable nftables')"
 }
 
 # --- FEAT: OLED screen-sleep (hypridle) + warm light (hyprsunset) ---
@@ -717,11 +720,12 @@ do_verify() {
   pkg_have bolt && vok "bolt present (Thunderbolt authorization)" || vwarn "bolt not installed"
   systemctl is-enabled fwupd-refresh.timer >/dev/null 2>&1 && vok "fwupd-refresh.timer enabled" || vwarn "fwupd-refresh.timer not enabled"
 
-  # firewall
-  if systemctl is-active nftables >/dev/null 2>&1; then
-    vok "nftables firewall active (default-deny inbound)"
+  # firewall -- nftables.service is a oneshot (loads the ruleset, then exits), so
+  # 'is-active' reads inactive even when working; 'is-enabled' is the real signal.
+  if systemctl is-enabled nftables >/dev/null 2>&1; then
+    vok "nftables firewall enabled (default-deny inbound; ruleset loads every boot)"
   elif [ -f /etc/nftables.conf ] && grep -q 'policy drop' /etc/nftables.conf 2>/dev/null; then
-    vwarn "nftables.conf present but service inactive (run: sudo systemctl enable --now nftables)"
+    vwarn "nftables.conf present but service not enabled (run: ./$(basename "$0") firewall)"
   else
     vnote "no host firewall (run: ./$(basename "$0") firewall)"
   fi
