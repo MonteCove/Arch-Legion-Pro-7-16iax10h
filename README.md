@@ -62,6 +62,40 @@ Governor mapping (Fn-Q mode → sustained PL1): **quiet 45 W / balanced 90 W / p
 recovers ≤ 88 °C; on **battery** it caps to 90 W regardless of mode. The CPU's ~105 °C
 Tjmax throttle is the hard backstop.
 
+### `Build_16iax10h_tweaks.sh`
+One idempotent, modular **"fixes & features"** installer for everything an audit turned up
+*after* the audio + power basics. It runs a set of named **modules** (with no args it runs the
+default set); each is logged, error-checked and skip-on-done. Built and vetted via a hardware
+audit + an adversarial code review.
+
+```bash
+./Build_16iax10h_tweaks.sh            # run the default module set (safe to re-run)
+./Build_16iax10h_tweaks.sh --list     # list modules
+./Build_16iax10h_tweaks.sh --verify   # read-only health check (no sudo)
+./Build_16iax10h_tweaks.sh resume-audio resume-power   # run only these
+./Build_16iax10h_tweaks.sh all        # include the opt-in module (spd5118)
+```
+
+Modules:
+- **resume-audio** *(fix)* — `systemd-sleep` hook that re-binds the AW88399 smart-amps on resume;
+  without it the DSP firmware fails its CRC check after S3 and the **speakers go silent until reboot**.
+- **resume-power** *(fix)* — `systemd-sleep` hook that re-applies the MMIO-RAPL cap on resume;
+  `legion-powercapd` only writes on a mode change, so S3 could otherwise **drop the cap to the
+  BIOS ~30 W default**.
+- **cpu-governor** — `cpupower` `performance` → `powersave` (dynamic HWP; still full turbo under
+  load, gentler on battery).
+- **snapshots** — `snapper` + `snap-pac` + `grub-btrfs` → bootable Btrfs rollback per pacman txn.
+- **btrfs-scrub / zram / suspend-deep** — monthly scrub timer, grow zram toward RAM, pin `deep`/S3.
+- **video-accel / gpu-offload / thunderbolt / firmware** — `intel-media-driver` (iGPU HW decode),
+  `nvidia-prime` (`prime-run`), `bolt`, the `fwupd-refresh` timer.
+- **nvidia-powerd** — NVIDIA Dynamic Boost; **auto-masks itself** if the BIOS lacks NVPCF.
+- **battery-info** *(read-only)* — reports battery wear + charge-limit availability.
+- **spd5118** *(opt-in)* — blacklist the redundant DIMM temp sensor to silence a benign resume error.
+
+It deliberately does **not** touch two things the audit proved unsafe on this EC: battery
+charge-limit / conservation EC writes (no working interface exists on this model), and the fan
+pwm curve (writing it can crash the EC / stop the fans on Q7CN).
+
 ### `systemd/`
 - **`legion-powercapd.service`** — the governor daemon unit (current). Runs
   `legion-powercap --daemon`, `Restart=always`, starts at boot.
@@ -73,7 +107,7 @@ Tjmax throttle is the hard backstop.
 ## Order to run (fresh install)
 
 The two builders are **independent** (audio = speakers/kernel; power = CPU power/fan/Fn-Q), but
-run them in this order: **audio → reboot into the audio kernel → power.** The power installer
+run them in this order: **audio → reboot into the audio kernel → power → tweaks.** The power installer
 builds the `legion-laptop` module (via DKMS) for the kernel you're *running*, so you want to be on
 the audio kernel when you run it. With DKMS it self-heals for other kernels, so the order is for
 cleanliness, not a hard dependency.
@@ -95,13 +129,21 @@ uname -r                          # expect: ...-16iax10h-audio
 # --- 4. Power / fan / Fn-Q governor (DKMS-builds legion for the running kernel) ---
 ./Build_16iax10h_power.sh
 ./Build_16iax10h_power.sh --verify    # expect: N passed, 0 failed
+
+# --- 5. Fixes & features: resume hooks (speakers + power cap survive sleep), governor,
+#        snapshots, hw video decode, etc.  Run last, after audio + power are in place. ---
+./Build_16iax10h_tweaks.sh
+./Build_16iax10h_tweaks.sh --verify   # expect: N passed, 0 failed
 ```
 
-After this, both maintain themselves:
+After this, the setup maintains itself:
 - **Audio** is a separate kernel package — rebuild it with `Build_16iax10h_audio.sh` when a newer
   kernel lands (and a matching patch exists).
 - **Power's `legion-laptop` is a DKMS module**, so it auto-rebuilds whenever any kernel's headers
   install (including future audio-kernel rebuilds). Re-run `--verify` to confirm after a rebuild.
+- **Tweaks** are mostly install-once system config; re-run `Build_16iax10h_tweaks.sh --verify` after a
+  reboot or major update. The two `systemd-sleep` hooks live in a package dir but aren't
+  package-managed, so they survive updates.
 
 Re-run either script any time — both are idempotent and skip completed steps (`--force` redoes everything).
 
