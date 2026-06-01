@@ -449,11 +449,13 @@ mod_suspend_deep() {
   log "applies on next boot ('cat /sys/power/mem_sleep' should then show '[deep]')"
 }
 
-# --- SAFETY: hibernation (btrfs swapfile + resume + battery-only suspend-then-hibernate) ---
-# WHY: the laptop died silently because it SUSPENDED on battery and drained -- zram
-# can't hold a hibernate image, so there was no save-to-disk fallback. This creates a
-# real swapfile and wires up resume. On AC the laptop stays on (just screen-off+lock);
-# only on battery does it deep-sleep then hibernate (see the idle-sleep helper + lid rule).
+# --- SAFETY: hibernation (btrfs swapfile + resume + nvidia freeze-fix; KEEPS early KMS) ---
+# WHY: the laptop died silently because it SUSPENDED on battery and drained -- zram can't
+# hold a hibernate image, so there was no save-to-disk fallback. This creates a real swapfile,
+# wires up resume=, and clears the nvidia "freeze -5" via PreserveVideoMemoryAllocations=0
+# WITHOUT removing nvidia from early KMS (removing early KMS bricks the GPU on this box).
+# CAVEAT: on Blackwell + nvidia-open 610 + kernel 7.0, RESUME may still hit an upstream GPU
+# bug (fresh boot, lost session). It is lockout-proof (early KMS stays), but may not restore.
 mod_hibernate() {
   step "[hibernate] btrfs swapfile + resume + battery-only suspend-then-hibernate (prevents silent death)"
   local rootfs; rootfs="$(findmnt -no FSTYPE / 2>/dev/null || true)"
@@ -536,47 +538,35 @@ mod_hibernate() {
   $SUDO mkdir -p /etc/systemd/logind.conf.d
   write_file /etc/systemd/logind.conf.d/10-16iax10h.conf "$(printf '%s\n' '[Login]' 'HandleLidSwitch=suspend-then-hibernate' 'HandleLidSwitchExternalPower=lock')" || true
 
-  # 7) NVIDIA + hibernate: take nvidia OUT of early KMS so it loads at the normal
-  #    time, AFTER the packaged /usr/lib/modprobe.d/nvidia-sleep.conf options apply
-  #    (NVreg_UseKernelSuspendNotifiers=1 + NVreg_TemporaryFilePath=/var/tmp). With
-  #    early KMS, nvidia loads from the initramfs before those options take effect, so
-  #    its hibernate 'freeze' callback aborts -> "nv_pmops_freeze returns -5" -> resume
-  #    fails -> fresh boot (lost session). DSDT/driver-verified for nvidia-open 595+.
-  #    Requires the cmdline nvidia-drm.modeset=1 (already set) so KMS still comes up.
-  local MKICONF=/etc/mkinitcpio.conf rebuild_initramfs=0
+  # 7) NVIDIA + hibernate: clear the "nv_pmops_freeze returns -5" WITHOUT removing nvidia
+  #    from early KMS. (An earlier version removed nvidia from early KMS -- that BRICKED the
+  #    GPU on this hybrid box: nvidia_modeset oopsed, no /dev/dri nvidia card node, Hyprland
+  #    crashed on login = lockout. NEVER remove early KMS here.) On the OPEN driver the legacy
+  #    /proc/driver/nvidia/suspend node is absent, so PreserveVideoMemoryAllocations=1 aborts
+  #    freeze with -5; pinning it to 0 hands VRAM save/restore to the kernel-notifier path
+  #    (UseKernelSuspendNotifiers=1 + TemporaryFilePath=/var/tmp are already shipped in
+  #    /usr/lib/modprobe.d/nvidia-sleep.conf). Verified against omarchy #5554 Test2.
   if pkg_have nvidia-open-dkms || pkg_have nvidia-dkms || pkg_have nvidia; then
-    if grep -qE '^MODULES=.*\bnvidia\b' "$MKICONF" 2>/dev/null; then
-      $SUDO cp "$MKICONF" "$MKICONF.bak-pre-nvidia-hibernate" 2>/dev/null || true
-      # drop the nvidia modules from MODULES=( ... ) (handles the JaKooLit/default 4-module list)
-      $SUDO sed -i -E 's/^(MODULES=\()[[:space:]]*nvidia nvidia_modeset nvidia_uvm nvidia_drm[[:space:]]*(\))/\1\2/' "$MKICONF"
-      # generic fallback: strip any remaining nvidia* tokens inside MODULES=( ... )
-      $SUDO sed -i -E '/^MODULES=\(/ s/\bnvidia(_[a-z]+)?\b//g; /^MODULES=\(/ s/  +/ /g; /^MODULES=\(/ s/\( +/(/; /^MODULES=\(/ s/ +\)/)/' "$MKICONF"
-      if grep -qE '^MODULES=.*\bnvidia\b' "$MKICONF"; then
-        warn "could not fully remove nvidia from MODULES= in $MKICONF -- edit by hand (vim); hibernate resume will keep failing until then"
-      else
-        log "removed nvidia from early-KMS MODULES= (backup: $MKICONF.bak-pre-nvidia-hibernate)"
-        rebuild_initramfs=1
-      fi
-    else
-      log "skip: nvidia already not in early-KMS MODULES="
-    fi
-    # drop the 'kms' hook too (it force-adds GPU drivers early); harmless if absent
-    if grep -qE '^HOOKS=.*\bkms\b' "$MKICONF"; then
-      $SUDO sed -i -E '/^HOOKS=/ s/\bkms\b//; /^HOOKS=/ s/  +/ /g; /^HOOKS=/ s/\( +/(/; /^HOOKS=/ s/ +\)/)/' "$MKICONF"
-      grep -qE '^HOOKS=.*\bkms\b' "$MKICONF" || { log "removed 'kms' hook from $MKICONF"; rebuild_initramfs=1; }
-    fi
-    if [ "$rebuild_initramfs" = 1 ]; then
-      log "rebuilding initramfs (nvidia now loads late, so its hibernate options apply)"
+    write_file /etc/modprobe.d/nvidia-hibernate.conf "options nvidia NVreg_PreserveVideoMemoryAllocations=0" || true
+    # keep the nvidia sleep services DISABLED -- they no-op on the open driver and aggravate -5
+    $SUDO systemctl disable nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service nvidia-suspend-then-hibernate.service >/dev/null 2>&1 || true
+    log "set NVreg_PreserveVideoMemoryAllocations=0 (clears the freeze -5; early KMS untouched)"
+    if [ "$FILE_CHANGED" = 1 ]; then
+      log "rebuilding initramfs so the nvidia hibernate option is in place"
       $SUDO mkinitcpio -P 2>&1 | tee -a "$LOGFILE" | grep -iE 'Building|Image gener|error' || true
     fi
+    # SAFETY: never let this module touch early KMS
+    grep -qE '^MODULES=.*\bnvidia\b' /etc/mkinitcpio.conf || warn "nvidia missing from MODULES= -- early KMS must stay; restore it before rebooting (recover-disable-hibernate.sh)"
   else
-    log "no NVIDIA driver installed -- skipping the nvidia early-KMS hibernate fix"
+    log "no NVIDIA driver installed -- skipping the nvidia hibernate option"
   fi
 
-  log "hibernation configured. Effective AFTER the next reboot (resume hook + cmdline + nvidia late-load)."
+  log "hibernation configured. Effective AFTER the next reboot (resume hook + cmdline + nvidia option)."
   log "  on AC: lid/idle just locks + screen-off (stays on). On battery: deep-sleep then hibernate."
-  log "  NVIDIA: removed from early KMS so its suspend-notifier options apply (fixes resume -5)."
-  log "  test after reboot:  sudo systemctl hibernate   (should power off, then RESTORE your session)"
+  log "  NVIDIA: early KMS KEPT; PreserveVideoMemoryAllocations=0 clears the freeze -5."
+  warn "Blackwell + nvidia-open 610 + kernel 7.0 may still hit an upstream GPU bug on RESUME (fresh"
+  warn "  boot, lost session) -- this is lockout-proof (early KMS intact) but resume may not restore."
+  log "  test:  systemctl suspend (must pass) -> sudo systemctl hibernate.  revert: recover-disable-hibernate.sh"
 }
 
 # --- SAFETY: low-battery warner + last-resort auto-hibernate (awake) ---
