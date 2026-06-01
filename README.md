@@ -22,6 +22,10 @@ This setup assumes the **[JaKooLit Arch-Hyprland](https://github.com/JaKooLit/Ar
 as the desktop base. Install that first, then make the changes below; the `Build_16iax10h_*` scripts
 build on top of it.
 
+> 📦 **Every package these scripts install — what it's for, which script installs it, and a single
+> "install everything" command — is documented in [PACKAGES.md](PACKAGES.md).** (All official-repo; no
+> AUR needed. You don't install them by hand — the scripts do — but it's a useful reference.)
+
 1. **Install JaKooLit's Arch-Hyprland** and reboot into the Hyprland session.
 
 2. **Wire up the `awww` wallpaper daemon** (an OLED-friendly `swww` fork). Start it once, then
