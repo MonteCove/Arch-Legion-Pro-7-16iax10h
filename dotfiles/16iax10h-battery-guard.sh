@@ -21,6 +21,20 @@ ACT="${BATTERY_GUARD_ACT:-5}"
 
 note() { command -v notify-send >/dev/null 2>&1 && notify-send "$@" 2>/dev/null || true; }
 
+# estimate time left while discharging -> "~3h24m left" (energy/power or charge/current),
+# falling back to upower; empty string if it can't be computed.
+time_left() {
+    en="$(cat "$BAT/energy_now" 2>/dev/null)"; pw="$(cat "$BAT/power_now" 2>/dev/null)"
+    [ -z "$en" ] && en="$(cat "$BAT/charge_now" 2>/dev/null)"
+    [ -z "$pw" ] && pw="$(cat "$BAT/current_now" 2>/dev/null)"
+    if [ -n "$en" ] && [ -n "$pw" ] && [ "$pw" -gt 0 ] 2>/dev/null; then
+        awk -v e="$en" -v p="$pw" 'BEGIN{ m=e/p*60; printf "~%dh%02dm left", int(m/60), int(m)%60 }'
+        return
+    fi
+    command -v upower >/dev/null 2>&1 && upower -i "$(upower -e 2>/dev/null | grep -m1 BAT)" 2>/dev/null \
+        | awk -F: '/time to empty/{gsub(/^[ \t]+/,"",$2); printf "~%s left", $2}'
+}
+
 can_hibernate() {
     # hibernation works only if a real (non-zram) swap + resume target exists
     grep -q 'resume=' /proc/cmdline 2>/dev/null || return 1
@@ -44,10 +58,10 @@ while :; do
                     systemctl poweroff
                 fi
             elif [ "$cap" -le "$CRIT" ] && [ "$said_crit" = 0 ]; then
-                note -u critical "🔋 Battery very low (${cap}%)" "Plug in now — auto-action at ${ACT}%."
+                note -u critical "🔋 Battery very low (${cap}%)" "$(time_left). Plug in now — auto-action at ${ACT}%."
                 said_crit=1
             elif [ "$cap" -le "$LOW" ] && [ "$said_low" = 0 ]; then
-                note -u normal "🔋 Battery low (${cap}%)" "Consider plugging in the charger."
+                note -u normal "🔋 Battery low (${cap}%)" "$(time_left). Consider plugging in the charger."
                 said_low=1
             fi
             ;;

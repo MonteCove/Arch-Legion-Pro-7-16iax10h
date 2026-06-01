@@ -25,6 +25,9 @@
 #   video-accel    FEAT   intel-media-driver (iHD) iGPU hardware video decode
 #   gpu-offload    FEAT   nvidia-prime -> 'prime-run <app>' for per-app dGPU offload
 #   thunderbolt    FEAT   bolt (boltd) for Thunderbolt 4 device authorization
+#   hibernate      SAFETY btrfs swapfile + resume= + (battery) suspend-then-hibernate (stops silent
+#                         battery death: an idle/lid-closed laptop on battery saves to disk first)
+#   battery-guard  SAFETY low-battery desktop warnings (with time-left est) + auto-hibernate at crit %
 #   firmware       FEAT   fwupd metadata refresh + fwupd-refresh.timer
 #   firewall       FEAT   nftables default-deny-inbound host firewall (Wi-Fi/DHCP/mDNS still work)
 #   display        FEAT   OLED screen-sleep (deploys dotfiles/hypr/hypridle.conf) +
@@ -53,8 +56,8 @@
 set -uo pipefail
 
 # ============================ module registry ============================
-ALL_MODULES="resume-audio resume-power cpu-governor snapshots btrfs-scrub zram suspend-deep video-accel gpu-offload thunderbolt firmware firewall display nvidia-powerd battery-info spd5118"
-DEFAULT_MODULES="resume-audio resume-power cpu-governor snapshots btrfs-scrub zram suspend-deep video-accel gpu-offload thunderbolt firmware firewall display nvidia-powerd battery-info"
+ALL_MODULES="resume-audio resume-power cpu-governor snapshots btrfs-scrub zram suspend-deep hibernate battery-guard video-accel gpu-offload thunderbolt firmware firewall display nvidia-powerd battery-info spd5118"
+DEFAULT_MODULES="resume-audio resume-power cpu-governor snapshots btrfs-scrub zram suspend-deep hibernate battery-guard video-accel gpu-offload thunderbolt firmware firewall display nvidia-powerd battery-info"
 
 usage() {
   # print the leading comment block (lines after the shebang, up to the first
@@ -82,6 +85,10 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd || echo "
 HYPR_DIR="$HOME/.config/hypr"
 HYPRIDLE_SRC="$SCRIPT_DIR/dotfiles/hypr/hypridle.conf"
 HYPRUSER_SRC="$SCRIPT_DIR/dotfiles/hypr/16iax10h-user.conf"   # Super+L lock + hyprsunset temp
+BATGUARD_SRC="$SCRIPT_DIR/dotfiles/16iax10h-battery-guard.sh" # low-battery warner + auto-hibernate
+IDLESLEEP_SRC="$SCRIPT_DIR/dotfiles/16iax10h-idle-sleep.sh"   # AC-aware idle sleep (battery-only)
+SWAPFILE="/swap/swapfile"                                      # btrfs swapfile for hibernation
+SWAP_GIB="${LEGION_SWAP_GIB:-36}"                              # ~RAM(31G)+margin; holds the hibernate image
 
 SLEEPDIR="/usr/lib/systemd/system-sleep"
 CPUPOWER_CONF="/etc/default/cpupower-service.conf"
@@ -442,6 +449,119 @@ mod_suspend_deep() {
   log "applies on next boot ('cat /sys/power/mem_sleep' should then show '[deep]')"
 }
 
+# --- SAFETY: hibernation (btrfs swapfile + resume + battery-only suspend-then-hibernate) ---
+# WHY: the laptop died silently because it SUSPENDED on battery and drained -- zram
+# can't hold a hibernate image, so there was no save-to-disk fallback. This creates a
+# real swapfile and wires up resume. On AC the laptop stays on (just screen-off+lock);
+# only on battery does it deep-sleep then hibernate (see the idle-sleep helper + lid rule).
+mod_hibernate() {
+  step "[hibernate] btrfs swapfile + resume + battery-only suspend-then-hibernate (prevents silent death)"
+  local rootfs; rootfs="$(findmnt -no FSTYPE / 2>/dev/null || true)"
+  if [ "$rootfs" != "btrfs" ]; then
+    warn "/ is '$rootfs', not btrfs -- this module only implements the btrfs swapfile path; skipping"
+    return 0
+  fi
+  have btrfs || { err "btrfs-progs not found"; return 1; }
+
+  # 0) /swap as its own btrfs subvolume so snapper/snap-pac never snapshot the multi-GB
+  #    swapfile (btrfs snapshots are non-recursive -> a nested subvol is excluded; a
+  #    swapfile inside a snapshotted subvolume is unsupported on btrfs).
+  local swapdir; swapdir="$(dirname "$SWAPFILE")"
+  if $SUDO btrfs subvolume show "$swapdir" >/dev/null 2>&1; then
+    log "skip: $swapdir is already a btrfs subvolume"
+  else
+    [ -d "$swapdir" ] && $SUDO rmdir "$swapdir" 2>/dev/null || true
+    $SUDO btrfs subvolume create "$swapdir" || { err "could not create $swapdir subvolume"; return 1; }
+    log "created dedicated btrfs subvolume $swapdir (excluded from root snapshots)"
+  fi
+
+  # 1) create the swapfile (idempotent: skip if present and big enough)
+  local need=$(( SWAP_GIB * 1024 * 1024 * 1024 )) have_sz=0
+  [ -f "$SWAPFILE" ] && have_sz="$($SUDO stat -c %s "$SWAPFILE" 2>/dev/null || echo 0)"
+  if [ "$FORCE" != 1 ] && [ "$have_sz" -ge "$need" ] 2>/dev/null; then
+    log "skip: $SWAPFILE already present (~$((have_sz/1024/1024/1024))G)"
+  else
+    swapon --show=NAME --noheadings 2>/dev/null | grep -qx "$SWAPFILE" && $SUDO swapoff "$SWAPFILE" 2>/dev/null || true
+    $SUDO rm -f "$SWAPFILE" 2>/dev/null || true
+    log "creating ${SWAP_GIB}G swapfile at $SWAPFILE (this takes a moment)..."
+    if $SUDO btrfs filesystem mkswapfile --size "${SWAP_GIB}g" "$SWAPFILE" 2>>"$LOGFILE"; then
+      log "created $SWAPFILE via btrfs mkswapfile"
+    else
+      err "btrfs mkswapfile failed (see $LOGFILE); not enabling hibernation"; return 1
+    fi
+  fi
+  $SUDO swapon "$SWAPFILE" 2>/dev/null || swapon --show=NAME --noheadings 2>/dev/null | grep -qx "$SWAPFILE" || { err "swapon $SWAPFILE failed"; return 1; }
+
+  # 2) persist the swapfile in fstab (idempotent)
+  if grep -qF "$SWAPFILE" /etc/fstab 2>/dev/null; then
+    log "skip: $SWAPFILE already in /etc/fstab"
+  else
+    printf '%s none swap defaults 0 0\n' "$SWAPFILE" | $SUDO tee -a /etc/fstab >/dev/null
+    log "added $SWAPFILE to /etc/fstab"
+  fi
+
+  # 3) resume target: root device UUID + physical offset of the swapfile
+  local ruuid roffset
+  ruuid="$(findmnt -no UUID / 2>/dev/null)"
+  roffset="$($SUDO btrfs inspect-internal map-swapfile -r "$SWAPFILE" 2>/dev/null)"
+  if [ -z "$ruuid" ] || [ -z "$roffset" ]; then err "could not determine resume UUID/offset"; return 1; fi
+  log "resume target: UUID=$ruuid offset=$roffset"
+
+  # 4) add the 'resume' mkinitcpio hook (after 'filesystems') + rebuild initramfs
+  if grep -qE '^HOOKS=.*\bresume\b' /etc/mkinitcpio.conf; then
+    log "skip: resume hook already in mkinitcpio.conf"
+  else
+    $SUDO sed -i -E 's/^(HOOKS=.*)\bfilesystems\b/\1filesystems resume/' /etc/mkinitcpio.conf \
+      || { err "could not add resume hook"; return 1; }
+    grep -qE '^HOOKS=.*\bresume\b' /etc/mkinitcpio.conf || { err "resume hook edit did not take"; return 1; }
+    log "added 'resume' hook to mkinitcpio.conf -> rebuilding initramfs"
+    $SUDO mkinitcpio -P 2>&1 | tee -a "$LOGFILE" | grep -iE 'Building|Image gener|error' || true
+  fi
+
+  # 5) add resume= to the GRUB cmdline (idempotent) + regen
+  if grep -q 'resume=' "$GRUB_DEFAULT" 2>/dev/null; then
+    log "skip: resume= already in $GRUB_DEFAULT"
+  else
+    $SUDO sed -i "s|\(GRUB_CMDLINE_LINUX_DEFAULT=\"\)|\1resume=UUID=${ruuid} resume_offset=${roffset} |" "$GRUB_DEFAULT" \
+      || { err "could not add resume= to GRUB"; return 1; }
+    grep -q "resume=UUID=${ruuid}" "$GRUB_DEFAULT" || { err "GRUB resume= edit did not take"; return 1; }
+    log "added resume=UUID=${ruuid} resume_offset=${roffset} to GRUB"
+    regen_grub
+  fi
+
+  # 6) hibernate delay (battery only) + lid rules: on battery -> suspend-then-hibernate,
+  #    on AC -> just lock (stay on, no suspend).
+  $SUDO mkdir -p /etc/systemd/sleep.conf.d
+  write_file /etc/systemd/sleep.conf.d/10-16iax10h.conf "$(printf '%s\n' '# suspend first (instant resume), then hibernate to disk before the battery dies.' '[Sleep]' 'HibernateDelaySec=45min' 'HibernateOnACPower=no')" || true
+  $SUDO mkdir -p /etc/systemd/logind.conf.d
+  write_file /etc/systemd/logind.conf.d/10-16iax10h.conf "$(printf '%s\n' '[Login]' 'HandleLidSwitch=suspend-then-hibernate' 'HandleLidSwitchExternalPower=lock')" || true
+
+  log "hibernation configured. Effective AFTER the next reboot (resume hook + cmdline)."
+  log "  on AC: lid/idle just locks + screen-off (stays on). On battery: deep-sleep then hibernate."
+  log "  test after reboot:  sudo systemctl hibernate   (should power off, then restore on power-on)"
+}
+
+# --- SAFETY: low-battery warner + last-resort auto-hibernate (awake) ---
+mod_battery_guard() {
+  step "[battery-guard] Low-battery warnings (with time-left) + auto-hibernate at critical %"
+  [ -f "$BATGUARD_SRC" ] || { err "battery-guard script missing at $BATGUARD_SRC"; return 1; }
+  $SUDO install -m 0755 "$BATGUARD_SRC" /usr/local/bin/16iax10h-battery-guard.sh \
+    || { err "could not install battery-guard script"; return 1; }
+  local udir="$HOME/.config/systemd/user"
+  mkdir -p "$udir"
+  local svc="$udir/16iax10h-battery-guard.service" content
+  content="$(printf '%s\n' '[Unit]' 'Description=16IAX10H low-battery warner + auto-hibernate guard' 'After=graphical-session.target' '' '[Service]' 'Type=simple' 'ExecStart=/usr/local/bin/16iax10h-battery-guard.sh' 'Restart=always' 'RestartSec=10' '' '[Install]' 'WantedBy=default.target')"
+  if [ "$FORCE" = 1 ] || [ ! -f "$svc" ] || ! printf '%s\n' "$content" | cmp -s - "$svc"; then
+    printf '%s\n' "$content" > "$svc" && log "wrote $svc"
+  else
+    log "skip: battery-guard user service already up to date"
+  fi
+  systemctl --user daemon-reload 2>/dev/null || true
+  systemctl --user enable --now 16iax10h-battery-guard.service 2>/dev/null \
+    && log "enabled battery-guard (polls 60s; 20% notify / 10% warn / 5% act, with time-left)" \
+    || warn "could not enable battery-guard now (no session bus? run in your session: systemctl --user enable --now 16iax10h-battery-guard.service)"
+}
+
 # --- FEAT: Intel iGPU hardware video decode ---
 mod_video_accel() {
   step "[video-accel] Intel iGPU hardware video decode (intel-media-driver / iHD)"
@@ -601,6 +721,16 @@ mod_display() {
     fi
   fi
 
+  # AC-aware idle-sleep helper that hypridle's 15-min listener calls: stay on when
+  # plugged in, suspend-then-hibernate on battery (see dotfiles/hypr/hypridle.conf).
+  if [ -f "$IDLESLEEP_SRC" ]; then
+    $SUDO install -m 0755 "$IDLESLEEP_SRC" /usr/local/bin/16iax10h-idle-sleep.sh \
+      && log "installed AC-aware idle-sleep helper (on AC: stay on; on battery: deep sleep)" \
+      || warn "could not install idle-sleep helper"
+  else
+    warn "idle-sleep helper missing at $IDLESLEEP_SRC (repo incomplete?)"
+  fi
+
   log "warm light: press Super+N or click the Waybar sun to toggle hyprsunset (now 3000K via the drop-in)"
 }
 
@@ -728,6 +858,24 @@ do_verify() {
       || vwarn "deep pinned in $GRUB_DEFAULT but not yet on cmdline (reboot to apply)"
   else
     vnote "mem_sleep_default not pinned ($(cat /sys/power/mem_sleep 2>/dev/null || echo '?'))"
+  fi
+
+  # hibernation (prevents silent battery death)
+  local has_realswap=0
+  awk '$1!~/zram/{f=1} END{exit !f}' /proc/swaps 2>/dev/null && has_realswap=1
+  if [ "$has_realswap" = 1 ] && grep -q 'resume=' /proc/cmdline 2>/dev/null; then
+    vok "hibernation ready (real swap + resume= on cmdline)"
+  elif grep -q 'resume=' "$GRUB_DEFAULT" 2>/dev/null && [ -f "$SWAPFILE" ]; then
+    vwarn "hibernation configured but not active yet (reboot to load resume= + initramfs)"
+  else
+    vwarn "no hibernation -> a suspended laptop on battery can drain to death (run: ./$(basename "$0") hibernate)"
+  fi
+
+  # battery guard (low-battery warnings + auto-action)
+  if systemctl --user is-enabled 16iax10h-battery-guard.service >/dev/null 2>&1; then
+    vok "battery-guard active (low-battery warnings + auto-hibernate at critical %)"
+  else
+    vwarn "battery-guard not enabled (no low-battery warnings; run: ./$(basename "$0") battery-guard)"
   fi
 
   # feature packages
