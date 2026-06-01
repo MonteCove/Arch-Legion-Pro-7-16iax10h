@@ -43,6 +43,13 @@ build on top of it.
 
 Once JaKooLit is in and those three steps are done, continue with **"Order to run"** below.
 
+4. *(optional)* **Waybar battery — show time remaining inline.** JaKooLit's battery widget shows only
+   the percentage by default (time is hidden behind a click). `dotfiles/waybar/battery-module.jsonc`
+   has the tweaked `"battery"` block (adds `format-discharging`/`format-charging` with `· {time}`).
+   Paste it over the `"battery": { … }` block in `~/.config/waybar/Modules` (edit with vim), then
+   reload Waybar (`killall -SIGUSR2 waybar`). On battery it then reads e.g. `󰂁 79% · 3h12m`. Note:
+   while plugged in and *holding* at the conservation cap (`Not charging`), there is no time to show.
+
 ---
 
 ## Scripts
@@ -108,15 +115,34 @@ Tjmax throttle is the hard backstop.
 `conservation_mode` sysfs and installs `legion-conservation.service`, which caps charging
 (~60-80 %) at boot to protect the cell. DSDT-verified: `SBMC 0x03` → on / `0x05` → off, status
 `GBMD & 0x20` (patch in `patches/legion-conservation-block.c`). It also corrects the driver's
-`SBMC`/`GBMD` ACPI path (broken by the `VPC2004` rebind), which revives `rapidcharge`. Toggle:
+`SBMC`/`GBMD` ACPI path (broken by the `VPC2004` rebind), which revives `rapidcharge`.
+
+> ### ⚡ Charging stops at ~80 %? **That's normal — it's this feature working.**
+> With conservation mode **on** (the default), the laptop charges to roughly **80 %** and then
+> **stops on purpose** — the battery will read **`Not charging` and hold at ~79-80 %** while plugged
+> in. It will **not** top off to 100 %. This is intentional: keeping a lithium battery pinned at
+> 100 % on AC is what wears it out fastest, so capping at ~80 % greatly extends its lifespan.
+> Nothing is broken.
+>
+> Side effect: while it's *holding* at the cap (plugged in, `Not charging`), the Waybar battery
+> widget shows **no time estimate** — there's no charge/discharge happening, so there's nothing to
+> estimate. The time-to-empty appears as soon as you unplug.
+
+**When you want a full 100 % charge** (e.g. before travelling unplugged):
 
 ```bash
-echo 0 | sudo tee /sys/bus/platform/devices/VPC2004:00/conservation_mode   # charge to 100% once
-echo 1 | sudo tee /sys/bus/platform/devices/VPC2004:00/conservation_mode   # cap again
-sudo systemctl disable --now legion-conservation.service                   # keep 100% across reboots
+echo 0 | sudo tee /sys/bus/platform/devices/VPC2004:00/conservation_mode   # lift the cap -> charges to 100%
+echo 1 | sudo tee /sys/bus/platform/devices/VPC2004:00/conservation_mode   # re-apply the ~80% cap
 ```
 
-Set `LEGION_CONSERVATION=0 ./Build_16iax10h_power.sh` to install it but leave the cap off by default.
+The cap is **re-enabled automatically on every boot** by `legion-conservation.service`, so an `echo 0`
+only lasts until the next reboot. To make 100 % the permanent default instead:
+
+```bash
+sudo systemctl disable --now legion-conservation.service   # stop capping; charge to 100% from now on
+```
+
+Or set `LEGION_CONSERVATION=0 ./Build_16iax10h_power.sh` to install it but leave the cap off by default.
 
 ### `Build_16iax10h_tweaks.sh`
 One idempotent, modular **"fixes & features"** installer for everything an audit turned up
