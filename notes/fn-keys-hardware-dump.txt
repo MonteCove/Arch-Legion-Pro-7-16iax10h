@@ -1,0 +1,181 @@
+===== INPUT DEVICES (keyboards that emit Fn key events) =====
+H: Handlers=event0 
+H: Handlers=kbd event1 
+H: Handlers=kbd event2 
+N: Name="AT Translated Set 2 keyboard"
+H: Handlers=sysrq kbd leds event3 
+N: Name="ITE Tech. Inc. ITE Device(8258) Keyboard"
+H: Handlers=sysrq kbd leds event4 
+N: Name="ITE Tech. Inc. ITE Device(8258)"
+H: Handlers=event5 
+N: Name="ITE Tech. Inc. ITE Device(8258) Wireless Radio Control"
+H: Handlers=kbd event6 rfkill 
+N: Name="Video Bus"
+S: Sysfs=/devices/pci0000:00/acpi.video_bus.0/input/input7
+H: Handlers=kbd event7 
+N: Name="Video Bus"
+S: Sysfs=/devices/pci0000:00/0000:00:06.0/acpi.video_bus.1/input/input8
+H: Handlers=kbd event8 
+H: Handlers=kbd event9 
+H: Handlers=event10 mouse0 
+H: Handlers=event11 mouse1 
+H: Handlers=event12 
+H: Handlers=event13 
+H: Handlers=event14 
+H: Handlers=event15 
+H: Handlers=event16 
+H: Handlers=event17 
+H: Handlers=event18 
+H: Handlers=event19 
+H: Handlers=event20 
+
+===== LEGION / LENOVO WMI MODULES (these provide Fn-key handling) =====
+lenovo_wmi_other       36864  0
+lenovo_wmi_helpers     12288  1 lenovo_wmi_other
+lenovo_wmi_hotkey_utilities    12288  0
+lenovo_wmi_events      12288  0
+lenovo_wmi_capdata     20480  1 lenovo_wmi_other
+firmware_attributes_class    12288  1 lenovo_wmi_other
+wmi_bmof               12288  0
+nvidia_wmi_ec_backlight    12288  0
+legion_laptop         163840  0
+platform_profile       20480  2 legion_laptop,processor_thermal_soc_slider
+video                  81920  4 nvidia_wmi_ec_backlight,xe,i915,nvidia_modeset
+wmi                    36864  9 lenovo_wmi_events,video,nvidia_wmi_ec_backlight,lenovo_wmi_capdata,lenovo_wmi_hotkey_utilities,lenovo_wmi_other,wmi_bmof,legion_laptop,lenovo_wmi_helpers
+
+===== WMI hotkey utilities loaded? =====
+lenovo_wmi_hotkey_utilities    12288  0
+lenovo_wmi_events      12288  0
+wmi                    36864  9 lenovo_wmi_events,video,nvidia_wmi_ec_backlight,lenovo_wmi_capdata,lenovo_wmi_hotkey_utilities,lenovo_wmi_other,wmi_bmof,legion_laptop,lenovo_wmi_helpers
+
+===== platform / acpi key devices =====
+INT340E:00 ⇒ ../../../devices/platform/INT340E:00
+INTC1042:00 ⇒ ../../../devices/platform/INTC1042:00
+INTC1062:00 ⇒ ../../../devices/platform/INTC1042:00/INTC1062:00
+INTC1062:01 ⇒ ../../../devices/platform/INTC1042:00/INTC1062:01
+INTC1062:02 ⇒ ../../../devices/platform/INTC1042:00/INTC1062:02
+INTC1062:03 ⇒ ../../../devices/platform/INTC1042:00/INTC1062:03
+INTC1062:04 ⇒ ../../../devices/platform/INTC1042:00/INTC1062:04
+INTC1062:05 ⇒ ../../../devices/platform/INTC1042:00/INTC1062:05
+INTC1062:06 ⇒ ../../../devices/platform/INTC1042:00/INTC1062:06
+INTC1082:00 ⇒ ../../../devices/platform/INTC1082:00
+
+===== LEDs / backlight (some Fn keys toggle these) =====
+igc-08100-led0 ⇒ ../../devices/pci0000:80/0000:80:1c.0/0000:81:00.0/net/enp129s0/igc-08100-led0
+igc-08100-led1 ⇒ ../../devices/pci0000:80/0000:80:1c.0/0000:81:00.0/net/enp129s0/igc-08100-led1
+igc-08100-led2 ⇒ ../../devices/pci0000:80/0000:80:1c.0/0000:81:00.0/net/enp129s0/igc-08100-led2
+input3::capslock ⇒ ../../devices/platform/i8042/serio0/input/input3/input3::capslock
+input3::numlock ⇒ ../../devices/platform/i8042/serio0/input/input3/input3::numlock
+input3::scrolllock ⇒ ../../devices/platform/i8042/serio0/input/input3/input3::scrolllock
+input4::capslock ⇒ ../../devices/pci0000:80/0000:80:14.0/usb3/3-4/3-4:1.0/0003:048D:C197.0004/input/input4/input4::capslock
+input4::compose ⇒ ../../devices/pci0000:80/0000:80:14.0/usb3/3-4/3-4:1.0/0003:048D:C197.0004/input/input4/input4::compose
+input4::kana ⇒ ../../devices/pci0000:80/0000:80:14.0/usb3/3-4/3-4:1.0/0003:048D:C197.0004/input/input4/input4::kana
+input4::numlock ⇒ ../../devices/pci0000:80/0000:80:14.0/usb3/3-4/3-4:1.0/0003:048D:C197.0004/input/input4/input4::numlock
+input4::scrolllock ⇒ ../../devices/pci0000:80/0000:80:14.0/usb3/3-4/3-4:1.0/0003:048D:C197.0004/input/input4/input4::scrolllock
+phy0-led ⇒ ../../devices/pci0000:80/0000:80:1c.7/0000:82:00.0/leds/phy0-led
+platform::kbd_backlight ⇒ ../../devices/pci0000:00/0000:00:1f.0/PNP0C09:00/VPC2004:00/leds/platform::kbd_backlight
+backlight:
+intel_backlight ⇒ ../../devices/pci0000:00/0000:00:02.0/drm/card0/card0-eDP-2/intel_backlight
+nvidia_0 ⇒ ../../devices/pci0000:00/0000:00:06.0/0000:02:00.0/backlight/nvidia_0
+
+===== CAMERA hardware =====
+--- v4l video devices ---
+/dev/video0
+/dev/video1
+--- v4l2 device list ---
+Integrated Camera: Integrated C (usb-0000:80:14.0-11):
+	/dev/video0
+	/dev/video1
+	/dev/media0
+--- USB camera (lsusb) ---
+--- uvcvideo loaded? ---
+uvcvideo              180224  0
+videobuf2_vmalloc      20480  1 uvcvideo
+uvc                    12288  1 uvcvideo
+videobuf2_v4l2         40960  1 uvcvideo
+videobuf2_common       98304  4 videobuf2_vmalloc,videobuf2_v4l2,uvcvideo,videobuf2_memops
+videodev              409600  2 videobuf2_v4l2,uvcvideo
+mc                     94208  4 videodev,videobuf2_v4l2,uvcvideo,videobuf2_common
+
+===== CAMERA KILL-SWITCH (privacy shutter / hw switch) =====
+--- rfkill (some camera switches show here) ---
+1: phy0: Wireless LAN
+	Soft blocked: no
+	Hard blocked: no
+2: hci0: Bluetooth
+	Soft blocked: no
+	Hard blocked: no
+--- ACPI/WMI camera toggle device ---
+--- lenovo_wmi_camera module (THE camera-key driver) present? ---
+filename:       /lib/modules/7.0.10-arch1-1-16iax10h-audio/kernel/drivers/platform/x86/lenovo/lenovo-wmi-camera.ko.zst
+description:    Lenovo WMI Camera Button Driver
+alias:          wmi:50C76F1F-D8E4-D895-0A3D-62F4EA400013
+--- is there an INPUT event for camera-access toggle? ---
+
+===== KERNEL: legion-laptop camera/key support hints =====
+--- legion module params ---
+allow_custom_mode
+ec_readonly
+enable_platformprofile
+force
+wmi_dryrun
+--- dmesg lines about keys/wmi/camera ---
+
+===== CAMERA BUTTON DRIVER: module EXISTS but is it LOADED? =====
+  -> NOT LOADED (module present on disk but not active = camera key likely unhandled)
+--- is the camera WMI GUID device present in /sys/bus/wmi? ---
+05901221-D566-11D1-B2F0-00A0C9062910-1 ⇒ ../../../devices/pci0000:00/PNP0C14:00/wmi_bus/wmi_bus-PNP0C14:00/05901221-D566-11D1-B2F0-00A0C9062910-1
+05901221-D566-11D1-B2F0-00A0C9062910-3 ⇒ ../../../devices/platform/PNP0C14:01/wmi_bus/wmi_bus-PNP0C14:01/05901221-D566-11D1-B2F0-00A0C9062910-3
+05901221-D566-11D1-B2F0-00A0C9062910-30 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/05901221-D566-11D1-B2F0-00A0C9062910-30
+05901221-D566-11D1-B2F0-00A0C9062910-33 ⇒ ../../../devices/platform/PNP0C14:03/wmi_bus/wmi_bus-PNP0C14:03/05901221-D566-11D1-B2F0-00A0C9062910-33
+05901221-D566-11D1-B2F0-00A0C9062910-35 ⇒ ../../../devices/platform/PNP0C14:04/wmi_bus/wmi_bus-PNP0C14:04/05901221-D566-11D1-B2F0-00A0C9062910-35
+05901221-D566-11D1-B2F0-00A0C9062910-39 ⇒ ../../../devices/platform/PNP0C14:05/wmi_bus/wmi_bus-PNP0C14:05/05901221-D566-11D1-B2F0-00A0C9062910-39
+05901221-D566-11D1-B2F0-00A0C9062910-41 ⇒ ../../../devices/platform/PNP0C14:06/wmi_bus/wmi_bus-PNP0C14:06/05901221-D566-11D1-B2F0-00A0C9062910-41
+05901221-D566-11D1-B2F0-00A0C9062910-43 ⇒ ../../../devices/platform/PNP0C14:07/wmi_bus/wmi_bus-PNP0C14:07/05901221-D566-11D1-B2F0-00A0C9062910-43
+0F7B30EC-AC90-4B34-B62F-87F85115505D-28 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/0F7B30EC-AC90-4B34-B62F-87F85115505D-28
+10AFC6D9-EA8B-4590-A2E7-1CD3C84BB4B1-21 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/10AFC6D9-EA8B-4590-A2E7-1CD3C84BB4B1-21
+14AFD777-106F-4C9B-B334-D388DC7809BE-6 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/14AFD777-106F-4C9B-B334-D388DC7809BE-6
+1E3391A1-2C89-464D-95D9-3028B72E7A33-26 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/1E3391A1-2C89-464D-95D9-3028B72E7A33-26
+1F13AB7F-6220-4210-8F8E-8BB5E71EE969-40 ⇒ ../../../devices/platform/PNP0C14:06/wmi_bus/wmi_bus-PNP0C14:06/1F13AB7F-6220-4210-8F8E-8BB5E71EE969-40
+2BC49DEF-7B15-4F05-8BB7-EE37B9547C0B-37 ⇒ ../../../devices/platform/PNP0C14:05/wmi_bus/wmi_bus-PNP0C14:05/2BC49DEF-7B15-4F05-8BB7-EE37B9547C0B-37
+362A3AFE-3D96-4665-8530-96DAD5BB300E-18 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/362A3AFE-3D96-4665-8530-96DAD5BB300E-18
+3FA95AF6-F0FF-48A6-8943-2363B3FBB26D-11 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/3FA95AF6-F0FF-48A6-8943-2363B3FBB26D-11
+4C90256D-44EA-D6A8-7650-63DF4FEB2CFF-15 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/4C90256D-44EA-D6A8-7650-63DF4FEB2CFF-15
+4DD5BD84-15A9-47E2-AD65-CC61A5C62FD0-13 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/4DD5BD84-15A9-47E2-AD65-CC61A5C62FD0-13
+603E9613-EF25-4338-A3D0-C46177516DB7-0 ⇒ ../../../devices/pci0000:00/PNP0C14:00/wmi_bus/wmi_bus-PNP0C14:00/603E9613-EF25-4338-A3D0-C46177516DB7-0
+6260ECAD-0D7D-4201-A8BD-2552E812501F-17 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/6260ECAD-0D7D-4201-A8BD-2552E812501F-17
+67A6C6CC-380A-4D25-AA35-A1397D1FBDFB-29 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/67A6C6CC-380A-4D25-AA35-A1397D1FBDFB-29
+77E614ED-F19E-46D6-A613-A8669FEE1FF0-34 ⇒ ../../../devices/platform/PNP0C14:04/wmi_bus/wmi_bus-PNP0C14:04/77E614ED-F19E-46D6-A613-A8669FEE1FF0-34
+7A8F5407-CB67-4D6E-B547-39B3BE018154-14 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/7A8F5407-CB67-4D6E-B547-39B3BE018154-14
+82A14BDD-B246-41AB-89E5-6CB41D06C2B3-42 ⇒ ../../../devices/platform/PNP0C14:07/wmi_bus/wmi_bus-PNP0C14:07/82A14BDD-B246-41AB-89E5-6CB41D06C2B3-42
+87FB2A6D-D802-48E7-9208-4576C5F5C8D8-12 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/87FB2A6D-D802-48E7-9208-4576C5F5C8D8-12
+887B54E2-DDDC-4B2C-8B88-68A26A8835D0-10 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/887B54E2-DDDC-4B2C-8B88-68A26A8835D0-10
+887B54E3-DDDC-4B2C-8B88-68A26A8835D0-4 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/887B54E3-DDDC-4B2C-8B88-68A26A8835D0-4
+8C5B9127-ECD4-4657-980F-851019F99CA5-8 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/8C5B9127-ECD4-4657-980F-851019F99CA5-8
+8FC0DE0C-B4E4-43FD-B0F3-8871711C1294-32 ⇒ ../../../devices/platform/PNP0C14:03/wmi_bus/wmi_bus-PNP0C14:03/8FC0DE0C-B4E4-43FD-B0F3-8871711C1294-32
+91433B17-B7B7-4640-BB40-34C67349FBEC-16 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/91433B17-B7B7-4640-BB40-34C67349FBEC-16
+92549549-4BDE-4F06-AC04-CE8BF898DBAA-5 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/92549549-4BDE-4F06-AC04-CE8BF898DBAA-5
+95D1DF76-D6C0-4E16-9193-7B2A849F3DF2-36 ⇒ ../../../devices/platform/PNP0C14:04/wmi_bus/wmi_bus-PNP0C14:04/95D1DF76-D6C0-4E16-9193-7B2A849F3DF2-36
+A6FEA33E-DABF-46F5-BFC8-460D961BEC9F-38 ⇒ ../../../devices/platform/PNP0C14:05/wmi_bus/wmi_bus-PNP0C14:05/A6FEA33E-DABF-46F5-BFC8-460D961BEC9F-38
+B642801B-3D21-45DE-90AE-6E86F164FB21-20 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/B642801B-3D21-45DE-90AE-6E86F164FB21-20
+B7F3CA0A-ACDC-42D2-9217-77C6C628FBD2-9 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/B7F3CA0A-ACDC-42D2-9217-77C6C628FBD2-9
+BBF1F790-6C2F-422B-BC8C-4E7369C7F6AB-19 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/BBF1F790-6C2F-422B-BC8C-4E7369C7F6AB-19
+BE1346E5-3A32-4A31-B8B0-2CD195E1F572-27 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/BE1346E5-3A32-4A31-B8B0-2CD195E1F572-27
+C3A03776-51AC-49AA-AD0F-F2F7D62C3F3C-2 ⇒ ../../../devices/platform/PNP0C14:01/wmi_bus/wmi_bus-PNP0C14:01/C3A03776-51AC-49AA-AD0F-F2F7D62C3F3C-2
+CE6C0974-0407-4F50-88BA-4FC3B6559AD8-31 ⇒ ../../../devices/platform/PNP0C14:03/wmi_bus/wmi_bus-PNP0C14:03/CE6C0974-0407-4F50-88BA-4FC3B6559AD8-31
+D320289E-8FEA-41E0-86F9-611D83151B5F-22 ⇒ ../../../devices/platform/PNP0C14:02/wmi_bus/wmi_bus-PNP0C14:02/D320289E-8FEA-41E0-86F9-611D83151B5F-22
+--- specifically the camera-button GUID 50C76F1F... ---
+  camera-button WMI GUID not exposed
+
+===== TOOLS available for key mapping (next session) =====
+  MISSING: evtest  (extra)
+  have: showkey
+  MISSING: wev  (extra)
+  MISSING: libinput  (extra)
+  MISSING: keyd  (extra)
+
+===== did we BLACKLIST anything that handles keys? (the power install blacklists) =====
+blacklist lenovo_wmi_gamezone
+blacklist ideapad_laptop
+
+===== which ITE keyboard handles Fn (event4 = the hotkey one)? show its capabilities =====
