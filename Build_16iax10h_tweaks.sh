@@ -536,9 +536,47 @@ mod_hibernate() {
   $SUDO mkdir -p /etc/systemd/logind.conf.d
   write_file /etc/systemd/logind.conf.d/10-16iax10h.conf "$(printf '%s\n' '[Login]' 'HandleLidSwitch=suspend-then-hibernate' 'HandleLidSwitchExternalPower=lock')" || true
 
-  log "hibernation configured. Effective AFTER the next reboot (resume hook + cmdline)."
+  # 7) NVIDIA + hibernate: take nvidia OUT of early KMS so it loads at the normal
+  #    time, AFTER the packaged /usr/lib/modprobe.d/nvidia-sleep.conf options apply
+  #    (NVreg_UseKernelSuspendNotifiers=1 + NVreg_TemporaryFilePath=/var/tmp). With
+  #    early KMS, nvidia loads from the initramfs before those options take effect, so
+  #    its hibernate 'freeze' callback aborts -> "nv_pmops_freeze returns -5" -> resume
+  #    fails -> fresh boot (lost session). DSDT/driver-verified for nvidia-open 595+.
+  #    Requires the cmdline nvidia-drm.modeset=1 (already set) so KMS still comes up.
+  local MKICONF=/etc/mkinitcpio.conf rebuild_initramfs=0
+  if pkg_have nvidia-open-dkms || pkg_have nvidia-dkms || pkg_have nvidia; then
+    if grep -qE '^MODULES=.*\bnvidia\b' "$MKICONF" 2>/dev/null; then
+      $SUDO cp "$MKICONF" "$MKICONF.bak-pre-nvidia-hibernate" 2>/dev/null || true
+      # drop the nvidia modules from MODULES=( ... ) (handles the JaKooLit/default 4-module list)
+      $SUDO sed -i -E 's/^(MODULES=\()[[:space:]]*nvidia nvidia_modeset nvidia_uvm nvidia_drm[[:space:]]*(\))/\1\2/' "$MKICONF"
+      # generic fallback: strip any remaining nvidia* tokens inside MODULES=( ... )
+      $SUDO sed -i -E '/^MODULES=\(/ s/\bnvidia(_[a-z]+)?\b//g; /^MODULES=\(/ s/  +/ /g; /^MODULES=\(/ s/\( +/(/; /^MODULES=\(/ s/ +\)/)/' "$MKICONF"
+      if grep -qE '^MODULES=.*\bnvidia\b' "$MKICONF"; then
+        warn "could not fully remove nvidia from MODULES= in $MKICONF -- edit by hand (vim); hibernate resume will keep failing until then"
+      else
+        log "removed nvidia from early-KMS MODULES= (backup: $MKICONF.bak-pre-nvidia-hibernate)"
+        rebuild_initramfs=1
+      fi
+    else
+      log "skip: nvidia already not in early-KMS MODULES="
+    fi
+    # drop the 'kms' hook too (it force-adds GPU drivers early); harmless if absent
+    if grep -qE '^HOOKS=.*\bkms\b' "$MKICONF"; then
+      $SUDO sed -i -E '/^HOOKS=/ s/\bkms\b//; /^HOOKS=/ s/  +/ /g; /^HOOKS=/ s/\( +/(/; /^HOOKS=/ s/ +\)/)/' "$MKICONF"
+      grep -qE '^HOOKS=.*\bkms\b' "$MKICONF" || { log "removed 'kms' hook from $MKICONF"; rebuild_initramfs=1; }
+    fi
+    if [ "$rebuild_initramfs" = 1 ]; then
+      log "rebuilding initramfs (nvidia now loads late, so its hibernate options apply)"
+      $SUDO mkinitcpio -P 2>&1 | tee -a "$LOGFILE" | grep -iE 'Building|Image gener|error' || true
+    fi
+  else
+    log "no NVIDIA driver installed -- skipping the nvidia early-KMS hibernate fix"
+  fi
+
+  log "hibernation configured. Effective AFTER the next reboot (resume hook + cmdline + nvidia late-load)."
   log "  on AC: lid/idle just locks + screen-off (stays on). On battery: deep-sleep then hibernate."
-  log "  test after reboot:  sudo systemctl hibernate   (should power off, then restore on power-on)"
+  log "  NVIDIA: removed from early KMS so its suspend-notifier options apply (fixes resume -5)."
+  log "  test after reboot:  sudo systemctl hibernate   (should power off, then RESTORE your session)"
 }
 
 # --- SAFETY: low-battery warner + last-resort auto-hibernate (awake) ---
