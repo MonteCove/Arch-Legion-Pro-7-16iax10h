@@ -1012,13 +1012,18 @@ do_verify() {
     # AC vs battery: the governor caps PL1 to the battery ceiling (90W) off-charger
     ac=1; for d in /sys/class/power_supply/*; do [ "$(cat "$d/type" 2>/dev/null)" = "Mains" ] && { ac="$(cat "$d/online" 2>/dev/null || echo 1)"; break; }; done
     [ "$ac" = 0 ] && [ "$exp" -gt 90 ] && exp=90
-    # the BIOS hard-clamps MMIO PL1 to constraint_0_max_power_uw (~55W on battery);
-    # a request above that silently clamps, so the live value can be < exp legitimately.
+    # On BATTERY only, the BIOS hard-clamps MMIO PL1 to constraint_0_max_power_uw
+    # (~55W); a request above that silently clamps, so the live value can be < exp.
+    # On AC that field still reads ~55W but is NOT enforced (full watts apply), so we
+    # must NOT clamp the expectation on AC -- doing so caused a false warning at 130W.
     fwmax="$(awk '{printf "%.0f", $1/1000000}' "$mmio/constraint_0_max_power_uw" 2>/dev/null || echo 0)"
-    [ "${fwmax:-0}" -gt 0 ] && [ "$exp" -gt "$fwmax" ] && exp="$fwmax"
+    [ "$ac" = 0 ] && [ "${fwmax:-0}" -gt 0 ] && [ "$exp" -gt "$fwmax" ] && exp="$fwmax"
     temp="$(pkg_temp_c)"
     if [ "$pl1" = "$exp" ]; then
       vok "governor functional: mode=${mode_name}$([ "$ac" = 0 ] && echo ' (battery)') -> PL1=${pl1}W (matches$([ "$ac" = 0 ] && echo ', firmware-clamped'))"
+    elif [ "$pl1" -gt "$exp" ] && [ "$ac" = 1 ]; then
+      # on AC the live PL1 can EXCEED the nominal mode floor (boost / firmware headroom) -- that's fine
+      vok "governor functional: mode=${mode_name} (AC) -> PL1=${pl1}W (>= ${exp}W target; full power on AC)"
     elif [ "$pl1" -lt "$exp" ] && [ "$temp" -ge 94 ]; then
       vok "governor functional: PL1=${pl1}W (< ${exp}W) but CPU at ${temp}C -- thermal guard active (expected)"
     elif [ "$ac" = 0 ] && [ "$pl1" -gt 30 ] && [ "$pl1" -le "${fwmax:-55}" ]; then
