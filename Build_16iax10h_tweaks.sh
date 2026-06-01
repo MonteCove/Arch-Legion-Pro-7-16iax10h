@@ -564,8 +564,8 @@ mod_hibernate() {
   log "hibernation configured. Effective AFTER the next reboot (resume hook + cmdline + nvidia option)."
   log "  on AC: lid/idle just locks + screen-off (stays on). On battery: deep-sleep then hibernate."
   log "  NVIDIA: early KMS KEPT; PreserveVideoMemoryAllocations=0 clears the freeze -5."
-  warn "Blackwell + nvidia-open 610 + kernel 7.0 may still hit an upstream GPU bug on RESUME (fresh"
-  warn "  boot, lost session) -- this is lockout-proof (early KMS intact) but resume may not restore."
+  log "  VERIFIED WORKING on 2026-05-31: kernel 7.0.10-...-16iax10h-audio + nvidia-open 610.43.02 --"
+  log "  full hibernate+resume restored the session, no nv_pmops_freeze -5, no Xid GPU faults."
   log "  test:  systemctl suspend (must pass) -> sudo systemctl hibernate.  revert: recover-disable-hibernate.sh"
 }
 

@@ -168,6 +168,16 @@ Modules:
   load, gentler on battery).
 - **snapshots** — `snapper` + `snap-pac` + `grub-btrfs` → bootable Btrfs rollback per pacman txn.
 - **btrfs-scrub / zram / suspend-deep** — monthly scrub timer, grow zram toward RAM, pin `deep`/S3.
+- **hibernate** — true hibernation (save session to disk, power off, restore on power-on). 36 GB btrfs
+  swapfile on a dedicated `/swap` subvol + `resume=` + the `resume` initramfs hook, and — the part that
+  took some doing — it clears the NVIDIA `nv_pmops_freeze -5` by writing
+  `/etc/modprobe.d/nvidia-hibernate.conf` (`NVreg_PreserveVideoMemoryAllocations=0`) **while keeping
+  nvidia in early KMS**. ⚠️ Early KMS is *mandatory* on this GPU — removing it bricks the display and
+  locks you out; this module never touches `MODULES=`. **Verified working** (2026-05-31, kernel 7.0.10
+  + nvidia-open 610.43.02): full hibernate/resume restored the session with no `-5` and no GPU Xid.
+  If a future kernel/driver regresses resume, `recover-disable-hibernate.sh` reverts it cleanly.
+- **battery-guard** — low-battery desktop warnings (with time-left estimate) + auto-action at 5 %
+  (hibernate if available, else clean poweroff) — so the laptop can't silently die on battery again.
 - **video-accel / gpu-offload / thunderbolt / firmware** — `intel-media-driver` (iGPU HW decode),
   `nvidia-prime` (`prime-run`), `bolt`, the `fwupd-refresh` timer.
 - **firewall** — nftables default-deny-inbound host firewall (allows established/related, loopback,
