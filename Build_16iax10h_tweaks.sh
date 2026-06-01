@@ -25,9 +25,6 @@
 #   video-accel    FEAT   intel-media-driver (iHD) iGPU hardware video decode
 #   gpu-offload    FEAT   nvidia-prime -> 'prime-run <app>' for per-app dGPU offload
 #   thunderbolt    FEAT   bolt (boltd) for Thunderbolt 4 device authorization
-#   hibernate      SAFETY btrfs swapfile + resume= + suspend-then-hibernate (stops silent
-#                         battery death: an idle/lid-closed laptop saves to disk before dying)
-#   battery-guard  SAFETY low-battery desktop warnings + auto-hibernate at critical % (while awake)
 #   firmware       FEAT   fwupd metadata refresh + fwupd-refresh.timer
 #   firewall       FEAT   nftables default-deny-inbound host firewall (Wi-Fi/DHCP/mDNS still work)
 #   display        FEAT   OLED screen-sleep (deploys dotfiles/hypr/hypridle.conf) +
@@ -56,8 +53,8 @@
 set -uo pipefail
 
 # ============================ module registry ============================
-ALL_MODULES="resume-audio resume-power cpu-governor snapshots btrfs-scrub zram suspend-deep hibernate battery-guard video-accel gpu-offload thunderbolt firmware firewall display nvidia-powerd battery-info spd5118"
-DEFAULT_MODULES="resume-audio resume-power cpu-governor snapshots btrfs-scrub zram suspend-deep hibernate battery-guard video-accel gpu-offload thunderbolt firmware firewall display nvidia-powerd battery-info"
+ALL_MODULES="resume-audio resume-power cpu-governor snapshots btrfs-scrub zram suspend-deep video-accel gpu-offload thunderbolt firmware firewall display nvidia-powerd battery-info spd5118"
+DEFAULT_MODULES="resume-audio resume-power cpu-governor snapshots btrfs-scrub zram suspend-deep video-accel gpu-offload thunderbolt firmware firewall display nvidia-powerd battery-info"
 
 usage() {
   # print the leading comment block (lines after the shebang, up to the first
@@ -85,9 +82,6 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd || echo "
 HYPR_DIR="$HOME/.config/hypr"
 HYPRIDLE_SRC="$SCRIPT_DIR/dotfiles/hypr/hypridle.conf"
 HYPRUSER_SRC="$SCRIPT_DIR/dotfiles/hypr/16iax10h-user.conf"   # Super+L lock + hyprsunset temp
-BATGUARD_SRC="$SCRIPT_DIR/dotfiles/16iax10h-battery-guard.sh" # low-battery warner + auto-hibernate
-SWAPFILE="/swap/swapfile"                                      # btrfs swapfile for hibernation
-SWAP_GIB="${LEGION_SWAP_GIB:-36}"                              # ~RAM(31G)+margin; holds the hibernate image
 
 SLEEPDIR="/usr/lib/systemd/system-sleep"
 CPUPOWER_CONF="/etc/default/cpupower-service.conf"
@@ -734,25 +728,6 @@ do_verify() {
       || vwarn "deep pinned in $GRUB_DEFAULT but not yet on cmdline (reboot to apply)"
   else
     vnote "mem_sleep_default not pinned ($(cat /sys/power/mem_sleep 2>/dev/null || echo '?'))"
-  fi
-
-  # hibernation (prevents silent battery death)
-  local has_realswap=0
-  swapon --show=NAME,TYPE --noheadings 2>/dev/null | grep -qvi zram && \
-    awk '$1!~/zram/{f=1} END{exit !f}' /proc/swaps 2>/dev/null && has_realswap=1
-  if [ "$has_realswap" = 1 ] && grep -q 'resume=' /proc/cmdline 2>/dev/null; then
-    vok "hibernation ready (real swap + resume= on cmdline)"
-  elif grep -q 'resume=' "$GRUB_DEFAULT" 2>/dev/null && [ -f "$SWAPFILE" ]; then
-    vwarn "hibernation configured but not active yet (reboot to load resume= + initramfs)"
-  else
-    vwarn "no hibernation -> a suspended laptop on battery can drain to death (run: ./$(basename "$0") hibernate)"
-  fi
-
-  # battery guard (low-battery warnings + auto-action)
-  if systemctl --user is-enabled 16iax10h-battery-guard.service >/dev/null 2>&1; then
-    vok "battery-guard active (low-battery warnings + auto-hibernate at critical %)"
-  else
-    vwarn "battery-guard not enabled (no low-battery warnings; run: ./$(basename "$0") battery-guard)"
   fi
 
   # feature packages
