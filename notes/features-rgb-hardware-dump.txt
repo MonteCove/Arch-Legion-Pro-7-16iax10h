@@ -1,0 +1,148 @@
+===== KEYBOARD RGB / LED HARDWARE =====
+--- /sys/class/leds (all LED devices) ---
+igc-08100-led0 ⇒ ../../devices/pci0000:80/0000:80:1c.0/0000:81:00.0/net/enp129s0/igc-08100-led0
+igc-08100-led1 ⇒ ../../devices/pci0000:80/0000:80:1c.0/0000:81:00.0/net/enp129s0/igc-08100-led1
+igc-08100-led2 ⇒ ../../devices/pci0000:80/0000:80:1c.0/0000:81:00.0/net/enp129s0/igc-08100-led2
+input3::capslock ⇒ ../../devices/platform/i8042/serio0/input/input3/input3::capslock
+input3::numlock ⇒ ../../devices/platform/i8042/serio0/input/input3/input3::numlock
+input3::scrolllock ⇒ ../../devices/platform/i8042/serio0/input/input3/input3::scrolllock
+input4::capslock ⇒ ../../devices/pci0000:80/0000:80:14.0/usb3/3-4/3-4:1.0/0003:048D:C197.0004/input/input4/input4::capslock
+input4::compose ⇒ ../../devices/pci0000:80/0000:80:14.0/usb3/3-4/3-4:1.0/0003:048D:C197.0004/input/input4/input4::compose
+input4::kana ⇒ ../../devices/pci0000:80/0000:80:14.0/usb3/3-4/3-4:1.0/0003:048D:C197.0004/input/input4/input4::kana
+input4::numlock ⇒ ../../devices/pci0000:80/0000:80:14.0/usb3/3-4/3-4:1.0/0003:048D:C197.0004/input/input4/input4::numlock
+input4::scrolllock ⇒ ../../devices/pci0000:80/0000:80:14.0/usb3/3-4/3-4:1.0/0003:048D:C197.0004/input/input4/input4::scrolllock
+phy0-led ⇒ ../../devices/pci0000:80/0000:80:1c.7/0000:82:00.0/leds/phy0-led
+platform::kbd_backlight ⇒ ../../devices/pci0000:00/0000:00:1f.0/PNP0C09:00/VPC2004:00/leds/platform::kbd_backlight
+--- the legion kbd_backlight LED: what does it expose? ---
+  device: /sys/class/leds/platform::kbd_backlight ⇒ ../../devices/pci0000:00/0000:00:1f.0/PNP0C09:00/VPC2004:00/leds/platform::kbd_backlight
+  max_brightness: 
+  brightness: 
+--- any multicolor/RGB LED class nodes? ---
+--- legion VPC2004 leds dir ---
+platform::kbd_backlight
+
+===== USB HID — the RGB controller is usually a separate HID interface =====
+--- ITE 8258 (the keyboard/RGB controller) HID interfaces ---
+--- hidraw devices (OpenRGB/L5P tools talk to these) ---
+/dev/hidraw0
+/dev/hidraw1
+/dev/hidraw2
+/dev/hidraw3
+/dev/hidraw4
+  /dev/hidraw0 -> HID_ID=0003:000017EF:0000F006 HID_NAME=ZEPHYR Idea5003 
+  /dev/hidraw1 -> HID_ID=0003:0000048D:0000C193 HID_NAME=ITE Tech. Inc. Lenovo Lighting  
+  /dev/hidraw2 -> HID_ID=0003:0000048D:0000C193 HID_NAME=ITE Tech. Inc. Lenovo Lighting  
+  /dev/hidraw3 -> HID_ID=0003:0000048D:0000C197 HID_NAME=ITE Tech. Inc. ITE Device(8258) 
+  /dev/hidraw4 -> HID_ID=0018:000004F3:0000327E HID_NAME=ELAN06FA:00 04F3:327E 
+
+===== SPECIAL FEATURES SURVEY — what hardware blocks exist that we haven't touched =====
+--- legion VPC2004 sysfs (ALL nodes — some are unused features) ---
+aslcodeversion
+conservation_mode
+cpu_cross_loading_powerlimit
+cpu_longterm_powerlimit
+cpu_shortterm_powerlimit
+driver ⇒ ../../../../../bus/platform/drivers/legion
+driver_override
+firmware_node ⇒ ../../../../LNXSYSTM:00/LNXSYBUS:00/PNP0A08:00/device:16/PNP0C09:00/VPC2004:00
+gpu_ctgp_powerlimit
+gpu_ppab_powerlimit
+hwmon
+isacfitforoc
+issupportcpuoc
+issupportgpuoc
+leds
+lockfancontroller
+modalias
+platform-profile
+power
+powermode
+rapidcharge
+subsystem ⇒ ../../../../../bus/platform
+touchpad
+uevent
+wakeup
+winkey
+
+--- legion-laptop debugfs / extra interfaces ---
+  (legion debugfs not mounted/present)
+
+--- NPU (Arrow Lake AI accelerator) ---
+intel_vpu             380928  0
+accel0
+  NPU /dev/accel present
+
+--- Thunderbolt / USB4 ---
+0-0 ⇒ ../../../devices/pci0000:00/0000:00:0d.2/domain0/0-0
+domain0 ⇒ ../../../devices/pci0000:00/0000:00:0d.2/domain0
+
+--- fingerprint reader? ---
+  (none above = no fingerprint reader)
+
+--- TPM ---
+/dev/tpm0
+/dev/tpmrm0
+  TPM version: 2
+
+--- ambient light sensor / accelerometer (iio) ---
+  no iio sensors
+
+--- G-Sync / MUX / hybrid display switch ---
+  no gsync sysfs node
+  (MUX switching is usually BIOS-only on Legion)
+
+--- overclocking / GPU OC support flags ---
+  issupportgpuoc: 5
+  issupportcpuoc: 0
+  isacfitforoc:   1
+
+--- fan control nodes (we deliberately don't touch, but document) ---
+  lockfancontroller: 0
+  legion hwmon: /sys/class/hwmon/hwmon5 (legion_hwmon)
+fan1_input fan1_label fan1_max fan1_target fan2_input fan2_label fan2_max fan2_target fan3_input fan3_label pwm1_auto_point10_accel pwm1_auto_point10_decel pwm1_auto_point10_pwm pwm1_auto_point10_temp pwm1_auto_point10_temp_hyst pwm1_auto_point1_accel pwm1_auto_point1_decel pwm1_auto_point1_pwm pwm1_auto_point1_temp pwm1_auto_point1_temp_hyst pwm1_auto_point2_accel pwm1_auto_point2_decel pwm1_auto_point2_pwm pwm1_auto_point2_temp pwm1_auto_point2_temp_hyst pwm1_auto_point3_accel pwm1_auto_point3_decel pwm1_auto_point3_pwm pwm1_auto_point3_temp pwm1_auto_point3_temp_hyst pwm1_auto_point4_accel pwm1_auto_point4_decel pwm1_auto_point4_pwm pwm1_auto_point4_temp pwm1_auto_point4_temp_hyst pwm1_auto_point5_accel pwm1_auto_point5_decel pwm1_auto_point5_pwm pwm1_auto_point5_temp pwm1_auto_point5_temp_hyst pwm1_auto_point6_accel pwm1_auto_point6_decel pwm1_auto_point6_pwm pwm1_auto_point6_temp pwm1_auto_point6_temp_hyst pwm1_auto_point7_accel pwm1_auto_point7_decel pwm1_auto_point7_pwm pwm1_auto_point7_temp pwm1_auto_point7_temp_hyst pwm1_auto_point8_accel pwm1_auto_point8_decel pwm1_auto_point8_pwm pwm1_auto_point8_temp pwm1_auto_point8_temp_hyst pwm1_auto_point9_accel pwm1_auto_point9_decel pwm1_auto_point9_pwm pwm1_auto_point9_temp pwm1_auto_point9_temp_hyst pwm1_mode pwm2_auto_point10_pwm pwm2_auto_point10_temp pwm2_auto_point10_temp_hyst pwm2_auto_point1_pwm pwm2_auto_point1_temp pwm2_auto_point1_temp_hyst pwm2_auto_point2_pwm pwm2_auto_point2_temp pwm2_auto_point2_temp_hyst pwm2_auto_point3_pwm pwm2_auto_point3_temp pwm2_auto_point3_temp_hyst pwm2_auto_point4_pwm pwm2_auto_point4_temp pwm2_auto_point4_temp_hyst pwm2_auto_point5_pwm pwm2_auto_point5_temp pwm2_auto_point5_temp_hyst pwm2_auto_point6_pwm pwm2_auto_point6_temp pwm2_auto_point6_temp_hyst pwm2_auto_point7_pwm pwm2_auto_point7_temp pwm2_auto_point7_temp_hyst pwm2_auto_point8_pwm pwm2_auto_point8_temp pwm2_auto_point8_temp_hyst pwm2_auto_point9_pwm pwm2_auto_point9_temp pwm2_auto_point9_temp_hyst pwm3_auto_point10_temp pwm3_auto_point10_temp_hyst pwm3_auto_point1_temp pwm3_auto_point1_temp_hyst pwm3_auto_point2_temp pwm3_auto_point2_temp_hyst pwm3_auto_point3_temp pwm3_auto_point3_temp_hyst pwm3_auto_point4_temp pwm3_auto_point4_temp_hyst pwm3_auto_point5_temp pwm3_auto_point5_temp_hyst pwm3_auto_point6_temp pwm3_auto_point6_temp_hyst pwm3_auto_point7_temp pwm3_auto_point7_temp_hyst pwm3_auto_point8_temp pwm3_auto_point8_temp_hyst pwm3_auto_point9_temp pwm3_auto_point9_temp_hyst 
+  legion hwmon: /sys/class/hwmon/hwmon6 (lenovo_wmi_other)
+fan1_div fan1_input fan1_max fan1_min fan1_target fan2_div fan2_input fan2_max fan2_min fan2_target fan4_div fan4_input fan4_max fan4_min fan4_target 
+
+--- rapidcharge / battery extras ---
+  rapidcharge: 1
+  winkey: 1
+  touchpad toggle: 1
+
+===== RGB CONTROLLER DETAIL (the 048d:c193 'Lenovo Lighting' HID) =====
+--- full lsusb tree for the keyboard/lighting device ---
+--- hidraw report descriptors size (helps identify the protocol) ---
+  /dev/hidraw1: HID_NAME=ITE Tech. Inc. Lenovo Lighting 
+    modalias: hid:b0003g0001v0000048Dp0000C193
+  /dev/hidraw2: HID_NAME=ITE Tech. Inc. Lenovo Lighting 
+    modalias: hid:b0003g0001v0000048Dp0000C193
+--- is OpenRGB installed? does it see anything? ---
+  openrgb: NOT installed (in extra repo)
+--- known Legion RGB tools availability (repo/AUR) ---
+  [repo] openrgb
+  [not in repo] legion-kbd-backlight
+  [not in repo] l5p-kbl
+  [not in repo] legiontux
+
+===== EXACT MODEL / RGB ZONE TYPE (4-zone vs per-key) =====
+  product: 83F5 / Legion Pro 7 16IAX10H
+  board: LNVNB161216
+  (16IAX10H 2025 -> determine 4-zone RGB vs per-key 'Spectrum' from research)
+
+===== USB4 / extra ports / card reader =====
+--- usb4 ---
+(no usb4 bus class)
+--- SD/card reader ---
+(no mmc host)
+
+===== AUDIO extras (does the amp support more — Dolby/cirrus)? =====
+--- loaded codecs ---
+Codec: Nvidia GPU ab HDMI/DP
+Codec: Realtek ALC287
+Codec: Intel Meteor Lake HDMI
+
+===== power: GPU OC nodes (issupportgpuoc=5 is interesting) =====
+  gpu_ctgp_powerlimit: 80
+  gpu_ppab_powerlimit: 15
+  cpu_longterm_powerlimit: 90
+  cpu_shortterm_powerlimit: 125
+  cpu_cross_loading_powerlimit: 0
