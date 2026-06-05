@@ -115,9 +115,32 @@ Used while figuring things out; not required for the finished setup:
 
 ---
 
+## Optional: Intel NPU (AI Boost) + OpenVINO — **AUR** (needs `yay`)
+
+Not installed by the scripts; added manually to use the Arrow Lake NPU for AI offload.
+Full guide: [notes/npu-openvino-SETUP.md](notes/npu-openvino-SETUP.md). Verified working.
+
+```bash
+yay -S --needed openvino openvino-intel-npu-plugin python-openvino python-openvino-telemetry nputop-git
+sudo usermod -aG render "$USER"   # then log out/in (NPU node is root:render)
+```
+
+| Package | Source | Why |
+|---|---|---|
+| `level-zero-loader` | extra | Level Zero API the NPU plugin uses (pulled as dep) |
+| `intel-npu-driver` / `intel-npu-compiler` | AUR | NPU userspace driver + model compiler (deps) |
+| `openvino` / `openvino-intel-npu-plugin` | AUR | inference runtime + the `NPU` device plugin |
+| `python-openvino` (+ `-telemetry`) | AUR | Python bindings (built for Python 3.14 — no venv needed) |
+| `nputop-git` | AUR | live NPU utilization monitor |
+
+Kernel side (`intel_vpu` + `vpu_40xx` firmware) already ships with the base install.
+
+---
+
 ## Notes
 
-- **No AUR required** — every package above is in the official repos.
+- **No AUR required for the core setup** — every package in the sections above is official-repo.
+  (The optional NPU/OpenVINO stack is the one exception and needs `yay`.)
 - **Headers matter for DKMS:** each kernel you boot needs its `*-headers` package, or `legion-laptop` /
   `nvidia` won't build for it. The audio build ships its own; for stock/zen run
   `sudo pacman -S --needed linux-headers linux-zen-headers`.
