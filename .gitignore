@@ -12,3 +12,4 @@ state/
 *.bak
 /hypridle.conf
 /notes.txt
+__pycache__/
