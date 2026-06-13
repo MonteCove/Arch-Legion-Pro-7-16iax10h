@@ -148,6 +148,10 @@ sudo systemctl disable --now legion-conservation.service   # stop capping; charg
 
 Or set `LEGION_CONSERVATION=0 ./Build_16iax10h_power.sh` to install it but leave the cap off by default.
 
+**Handy aliases** ([`dotfiles/zsh/aliases.zsh`](dotfiles/zsh/aliases.zsh)) — `source` it from `~/.zshrc`:
+`charge100` (charge to 100% until next reboot), `chargecap` (re-apply the ~80% cap),
+`chargestatus` (show cap + battery %), plus `soff`/`son` (OLED screen off/on).
+
 ### `Build_16iax10h_tweaks.sh`
 One idempotent, modular **"fixes & features"** installer for everything an audit turned up
 *after* the audio + power basics. It runs a set of named **modules** (with no args it runs the
