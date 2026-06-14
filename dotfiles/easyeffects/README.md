@@ -28,6 +28,14 @@ After this, audio routes: app → **Easy Effects Sink** → processed → Speake
 `wpctl status` (you'll see "Easy Effects Sink/Source") and just play something.
 
 ## Notes
+- **No window at login.** EasyEffects 8.x `--service-mode` alone *still opens the GUI window*
+  at startup. `--hide-window` (in the `ExecStart` below) keeps it fully background — the EQ
+  runs, no popup. Verify it's truly hidden with `hyprctl clients | grep -i easy` (no match).
+- **Starts under `graphical-session.target`, not `default.target`.** EasyEffects 8.x is a Qt
+  app needing `WAYLAND_DISPLAY`; at `default.target` it races the compositor and crash-dumps
+  (`no Qt platform plugin could be initialized`, `status=6/ABRT`) before `Restart=` recovers it.
+  Hooking it to `graphical-session.target` (reached by uwsm *after* the env import) starts it
+  once, cleanly. Re-run `systemctl --user disable && enable` after editing `WantedBy`.
 - **EasyEffects 8.2 changed its config format** to KDE `KConfig` files under
   `~/.config/easyeffects/db/*rc` (it depends on `kconfigwidgets`). The portable preset is
   still the JSON above — `easyeffects -l <name>` imports it into the new `db/` format.
@@ -39,13 +47,14 @@ After this, audio routes: app → **Easy Effects Sink** → processed → Speake
 # ~/.config/systemd/user/easyeffects.service
 [Unit]
 Description=EasyEffects audio processing (background, Legion speaker EQ)
-After=pipewire.service wireplumber.service
-Wants=pipewire.service
+After=graphical-session.target pipewire.service wireplumber.service
+Wants=pipewire.service wireplumber.service
+PartOf=graphical-session.target
 [Service]
 Type=simple
-ExecStart=/usr/bin/easyeffects --service-mode
+ExecStart=/usr/bin/easyeffects --service-mode --hide-window
 Restart=on-failure
 RestartSec=3
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
 ```

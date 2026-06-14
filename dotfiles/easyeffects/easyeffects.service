@@ -1,13 +1,20 @@
 [Unit]
 Description=EasyEffects audio processing (background, Legion speaker EQ)
-After=pipewire.service wireplumber.service
-Wants=pipewire.service
+# Start only once the Wayland session is up. EasyEffects 8.x is a Qt app and
+# needs WAYLAND_DISPLAY; starting at default.target races the compositor and
+# crash-dumps with "no Qt platform plugin could be initialized" (status=6/ABRT).
+# graphical-session.target (reached by uwsm after env import) is the right hook.
+After=graphical-session.target pipewire.service wireplumber.service
+Wants=pipewire.service wireplumber.service
+PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/easyeffects --service-mode
+# --service-mode keeps it running headless in the background; --hide-window
+# stops the GUI window from popping up at login (service-mode alone still shows it).
+ExecStart=/usr/bin/easyeffects --service-mode --hide-window
 Restart=on-failure
 RestartSec=3
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
