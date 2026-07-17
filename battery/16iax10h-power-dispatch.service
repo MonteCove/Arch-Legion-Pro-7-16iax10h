@@ -1,0 +1,11 @@
+[Unit]
+Description=16IAX10H AC/battery transition actions (panel Hz, Frigate NVR stack)
+# boot run needs docker up so the NVR stack starts when booting on AC
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/16iax10h-power-dispatch
+
+[Install]
+WantedBy=multi-user.target

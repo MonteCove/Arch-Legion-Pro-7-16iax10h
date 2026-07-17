@@ -1,0 +1,3 @@
+# Re-run the 16IAX10H power dispatcher on every AC adapter plug/unplug.
+# --no-block: udev RUN+ handlers must not linger (docker stop can take seconds).
+SUBSYSTEM=="power_supply", ATTR{type}=="Mains", RUN+="/usr/bin/systemctl start --no-block 16iax10h-power-dispatch.service"
