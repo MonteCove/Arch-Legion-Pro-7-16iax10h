@@ -129,14 +129,15 @@ def _firstint(s):
 def apply_state(state):
     """state: {mode, keys{code:hex}, effect, speed, dir, zones[], colors[], brightness, logo}"""
     msgs = []
+    all_ok = True  # any failed spectrum-ctl call must fail the whole apply
     # brightness first (so effects become visible)
     b = state.get("brightness")
     if isinstance(b, int) and 0 <= b <= 9:
-        ok, o = run_ctl(["brightness", str(b)]); msgs.append(o)
+        ok, o = run_ctl(["brightness", str(b)]); msgs.append(o); all_ok = all_ok and ok
     # logo
     lg = state.get("logo")
     if lg in (True, False):
-        ok, o = run_ctl(["logo", "on" if lg else "off"]); msgs.append(o)
+        ok, o = run_ctl(["logo", "on" if lg else "off"]); msgs.append(o); all_ok = all_ok and ok
 
     mode = state.get("mode")
     if mode == "perkey":
@@ -148,7 +149,7 @@ def apply_state(state):
             if sc and kc:
                 args.append(f"{kc}:{sc}")
         if args:
-            ok, o = run_ctl(["keys"] + args); msgs.append(o)
+            ok, o = run_ctl(["keys"] + args); msgs.append(o); all_ok = all_ok and ok
         else:
             msgs.append("no valid per-key assignments")
     elif mode == "effect":
@@ -165,7 +166,7 @@ def apply_state(state):
         d = state.get("dir")
         if d in DIRECTIONS:
             args += ["--dir", d]
-        ok, o = run_ctl(args); msgs.append(o)
+        ok, o = run_ctl(args); msgs.append(o); all_ok = all_ok and ok
     elif mode == "multi":
         specs = []
         for z in state.get("multi", []):
@@ -174,12 +175,12 @@ def apply_state(state):
                 sc = safe_color(col) if col else None
                 specs.append(f"{zn}:{ef}:{sc}" if sc else f"{zn}:{ef}:")
         if specs:
-            ok, o = run_ctl(["multi"] + specs); msgs.append(o)
+            ok, o = run_ctl(["multi"] + specs); msgs.append(o); all_ok = all_ok and ok
     elif mode == "quick":
         q = state.get("quick")
         if q in ("rgb", "white", "stealth", "off", "on"):
-            ok, o = run_ctl([q]); msgs.append(o)
-    return True, " | ".join(m for m in msgs if m)
+            ok, o = run_ctl([q]); msgs.append(o); all_ok = all_ok and ok
+    return all_ok, " | ".join(m for m in msgs if m)
 
 
 # ---- HTTP ----
@@ -204,6 +205,17 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return {}
 
+    # CSRF guard: any web page the browser visits can POST to 127.0.0.1 without a
+    # preflight; require a local Host and (when the browser sends one) a local Origin.
+    def _origin_ok(self):
+        allowed = {f"127.0.0.1:{PORT}", f"localhost:{PORT}"}
+        if self.headers.get("Host", "") not in allowed:
+            return False
+        origin = self.headers.get("Origin")
+        if origin and origin not in {f"http://{h}" for h in allowed}:
+            return False
+        return True
+
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             self._send(200, PAGE, "text/html; charset=utf-8")
@@ -215,6 +227,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        if not self._origin_ok():
+            return self._send(403, {"error": "forbidden (bad Origin/Host)"})
         body = self._read_json()
         if self.path == "/api/apply":
             ok, msg = apply_state(body)
@@ -503,10 +517,11 @@ function paintKey(code,d){keyColor[code]=curColor;d.style.background=curColor;d.
 function toggleSel(code,d){if(selected.has(code)){selected.delete(code);d.classList.remove('sel')}else{selected.add(code);d.classList.add('sel')}}
 function contrast(hex){const n=parseInt(hex.slice(1),16);const l=(0.299*(n>>16&255)+0.587*(n>>8&255)+0.114*(n&255));return l>140?'#0008':'#fff8'}
 function keyEl(code){return kb.querySelector(`[data-code="${code}"]`)}
-function selGroup(g){const map={wasd:['w','a','s','d'],arrows:['up','down','left','right'],
+function selGroup(g){const map={wasd:['w','a','s','d'],
  fkeys:['f1','f2','f3','f4','f5','f6','f7','f8','f9','f10','f11','f12']};
- // resolve by label for simplicity; numpad via codes
+ // resolve by label for simplicity; numpad + arrows via codes (arrow labels are ↑↓←→ glyphs)
  clearSel();
+ if(g==='arrows'){[0x009d,0x009f,0x009c,0x00a1].forEach(c=>{const e=keyEl(c);if(e){selected.add(c);e.classList.add('sel')}});return}
  if(g==='numpad'){[0x0026,0x0027,0x0028,0x0029,0x004f,0x0050,0x0051,0x0068,0x0079,0x007b,0x007c,0x008e,0x0090,0x0092,0x00a3,0x00a5,0x00a7].forEach(c=>{const e=keyEl(c);if(e){selected.add(c);e.classList.add('sel')}});return}
  const want=map[g];D.kb.forEach(([lbl,code])=>{if(want.includes(lbl.toLowerCase())){selected.add(code);keyEl(code).classList.add('sel')}});
 }
@@ -568,12 +583,13 @@ async function loadProfiles(){
  const names=Object.keys(d.profiles||{});
  if(!names.length){list.innerHTML='<span class="muted">No saved profiles yet. Apply a look, name it, and Save.</span>';return}
  names.forEach(n=>{const row=document.createElement('div');row.className='prof';
-  row.innerHTML=`<span class="nm">${n}</span>${d.default===n?'<span class="def">default</span>':''}
+  row.innerHTML=`<span class="nm"></span>${d.default===n?'<span class="def">default</span>':''}
    <span class="sp">
     <button class="sm primary" data-a="load">Load</button>
     <button class="sm" data-a="def">Set Default</button>
     <button class="sm ghost" data-a="del">Delete</button>
    </span>`;
+  row.querySelector('.nm').textContent=n; // textContent: names are user data, never markup (XSS)
   row.querySelector('[data-a=load]').onclick=async()=>{const r=await api('/api/profile/load','POST',{name:n});toast(r.ok?'Loaded “'+n+'” ✓':'Failed',r.ok);refresh()};
   row.querySelector('[data-a=def]').onclick=async()=>{await api('/api/profile/default','POST',{name:n});toast('“'+n+'” is now the boot default');loadProfiles()};
   row.querySelector('[data-a=del]').onclick=async()=>{if(confirm('Delete “'+n+'”?')){await api('/api/profile/delete','POST',{name:n});loadProfiles()}};

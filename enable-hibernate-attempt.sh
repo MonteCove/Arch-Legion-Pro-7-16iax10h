@@ -30,6 +30,15 @@ else
   echo "    restore it first, then re-run."; exit 1
 fi
 
+say "0b. Snapshot mkinitcpio.conf (recover-disable-hibernate.sh restores this exact file)"
+BAK="$MKI.bak-pre-nvidia-hibernate"
+if [ ! -f "$BAK" ]; then
+  grep -qE '^HOOKS=.*\bresume\b' "$MKI" && warn "current config already has the resume hook; this snapshot is NOT truly pre-hibernate"
+  cp "$MKI" "$BAK" && ok "snapshotted $MKI -> $BAK" || { bad "could not create $BAK"; exit 1; }
+else
+  ok "backup already exists: $BAK ($(date -r "$BAK" '+%Y-%m-%d %H:%M'))"
+fi
+
 say "1. Add the modprobe option that clears the freeze -5 (keeps the open kernel-notifier path)"
 echo 'options nvidia NVreg_PreserveVideoMemoryAllocations=0' > /etc/modprobe.d/nvidia-hibernate.conf
 ok "wrote /etc/modprobe.d/nvidia-hibernate.conf (Preserve=0; UseKernelSuspendNotifiers=1 + /var/tmp already shipped)"
@@ -62,9 +71,27 @@ say "5. Keep the nvidia sleep services DISABLED (open driver no-ops them; enabli
 systemctl disable nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service nvidia-suspend-then-hibernate.service >/dev/null 2>&1 || true
 ok "nvidia-suspend/resume/hibernate left disabled (correct for the open driver)"
 
-say "6. Rebuild initramfs + regenerate GRUB"
-mkinitcpio -P 2>&1 | grep -iE 'Building|Image gener|ERROR' || warn "check mkinitcpio output above"
-grub-mkconfig -o /boot/grub/grub.cfg 2>&1 | grep -iE 'Found linux|done|error' | tail -4
+say "6. Rebuild initramfs + regenerate GRUB (hard-fail: a bad image must never be rebooted into)"
+MKOUT="$(mktemp)"
+if mkinitcpio -P >"$MKOUT" 2>&1; then
+  grep -iE 'Image gener' "$MKOUT" | tail -3
+  ok "initramfs rebuilt"
+else
+  tail -20 "$MKOUT"
+  bad "mkinitcpio FAILED -- the initramfs may lack the resume hook. Do NOT test hibernate; fix the error above and re-run."
+  rm -f "$MKOUT"; exit 1
+fi
+rm -f "$MKOUT"
+GROUT="$(mktemp)"
+if grub-mkconfig -o /boot/grub/grub.cfg >"$GROUT" 2>&1; then
+  grep -iE 'Found linux' "$GROUT" | tail -3
+  ok "grub.cfg regenerated"
+else
+  tail -10 "$GROUT"
+  bad "grub-mkconfig FAILED -- grub.cfg may lack resume=. Do NOT test hibernate; fix the error above and re-run."
+  rm -f "$GROUT"; exit 1
+fi
+rm -f "$GROUT"
 
 say "7. FINAL SAFETY RE-CHECK: early KMS still intact after the rebuild?"
 if grep -qE '^MODULES=.*\bnvidia\b' "$MKI"; then

@@ -38,15 +38,25 @@ PY
     last="$(cat "$STATE" 2>/dev/null || true)"
     next="$(printf '%s\n' "$names" | awk -v last="$last" '
       {a[NR]=$0} END{for(i=1;i<=NR;i++) if(a[i]==last){print (i<NR)?a[i+1]:a[1]; ok=1} if(!ok) print a[1]}')"
-    printf '%s' "$next" > "$STATE"
-    python - "$PROFILES" "$next" <<'PY'
+    # apply first, advance the cycle state ONLY on success — a failed apply must not
+    # pop a success toast while the lighting never changed (needs the 70-legion-rgb
+    # hidraw udev rule from install-rgb-studio.sh for unprivileged access)
+    if python - "$PROFILES" "$next" <<'PY'
 import json, sys, importlib.util
 spec = importlib.util.spec_from_file_location("studio", "/opt/legion-rgb-studio/legion-rgb-studio.py")
 st = importlib.util.module_from_spec(spec); spec.loader.exec_module(st)
 state = json.load(open(sys.argv[1]))["profiles"].get(sys.argv[2])
-if state: st.apply_state(state)
+ok = False
+if state:
+    ok, _msg = st.apply_state(state)
+sys.exit(0 if ok else 1)
 PY
-    notify "Profile: $next"
+    then
+      printf '%s' "$next" > "$STATE"
+      notify "Profile: $next"
+    else
+      notify "⚠ Profile apply FAILED (hidraw access? run install-rgb-studio.sh again)"
+    fi
     exit 0
   fi
 fi

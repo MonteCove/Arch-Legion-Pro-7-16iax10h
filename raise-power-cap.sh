@@ -18,11 +18,14 @@
 #   sudo ./raise-power-cap.sh --no-load        # apply without the load test
 #   sudo ./raise-power-cap.sh --restore        # revert to the saved original limits
 #   sudo ./raise-power-cap.sh --guard 10       # re-apply every 10s (if the EC claws it back)
+#   sudo ./raise-power-cap.sh --sweep          # characterize sustained W per step (thermal-guarded)
+#     sweep tuning: --steps "90 120 140" --runs 3 --max-temp 93 --sweep-load 34 --warmup 12
+#   sudo ./raise-power-cap.sh --daemon         # follow Fn-Q mode + battery cap + thermal guard
 #
 set -uo pipefail
 
 # ---- help works without root ----
-case "${1:-}" in -h|--help) sed -n '2,30p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h|--help) awk 'NR>1{ if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "$0"; exit 0 ;; esac
 
 # ---- re-exec as root (preserving args) ----
 if [ "$(id -u)" -ne 0 ]; then
@@ -172,7 +175,7 @@ measure() {
   MEAS_W="?"
   if [ -n "$e0" ] && [ -n "$e1" ]; then
     MEAS_W="$(awk -v a="$e0" -v b="$e1" -v w="$win" -v m="$EMAX" \
-      'BEGIN{ d=b-a; if(d<0) d+=m; printf "%.1f", d/(w*1000000) }')"
+      'BEGIN{ d=b-a; if(d<0){ if(m>0) d+=m; else { print "?"; exit } } printf "%.1f", d/(w*1000000) }')"
   fi
   MEAS_PL1_DURING="$pld"
   log OK   "[$tag] avg ${MEAS_MHZ} MHz   package ~${MEAS_W} W   (${LOAD_KIND}, ${win}s window)"
@@ -224,19 +227,31 @@ do_apply() {
   # capture the true original limits once
   local cur0 cur1; cur0="$(cat "$m/constraint_0_power_limit_uw")"; cur1="$(cat "$m/constraint_1_power_limit_uw")"
   if [ ! -f "$ORIG_FILE" ]; then
-    { echo "MMIO_PATH=$m"; echo "ORIG_PL1=$cur0"; echo "ORIG_PL2=$cur1"; } > "$ORIG_FILE"
+    local o0="$cur0" o1="$cur1"
+    # if the governor daemon is running (or the limit is clearly already raised),
+    # the live registers are NOT the firmware originals — record the verified 30 W
+    # default instead, or --restore would "restore" to the raised values forever
+    if systemctl is-active --quiet legion-powercapd.service 2>/dev/null || [ "${cur0:-0}" -gt 31000000 ] 2>/dev/null; then
+      o0=30000000; o1=30000000
+      log WARN "limits look already raised (daemon active or PL1>31W) -> recording 30 W firmware default as original"
+    fi
+    { echo "MMIO_PATH=$m"; echo "ORIG_PL1=$o0"; echo "ORIG_PL2=$o1"; } > "$ORIG_FILE"
     chown "$real_user" "$ORIG_FILE" 2>/dev/null || true
-    log INFO "saved original limits to $ORIG_FILE (PL1=$(uw2w "$cur0") W PL2=$(uw2w "$cur1") W)"
+    log INFO "saved original limits to $ORIG_FILE (PL1=$(uw2w "$o0") W PL2=$(uw2w "$o1") W)"
   fi
   # shellcheck disable=SC1090
   . "$ORIG_FILE"
 
   if [ "$DO_LOAD" = 1 ]; then
     log STEP "Baseline (limits forced to original $(uw2w "$ORIG_PL1") W for a fair before/after)"
+    # killed during the baseline window -> put the entry limits back instead of
+    # leaving the machine clamped at the 30 W originals
+    trap 'kill_load; echo "$cur0" > "$m/constraint_0_power_limit_uw" 2>/dev/null; echo "$cur1" > "$m/constraint_1_power_limit_uw" 2>/dev/null' EXIT INT TERM
     echo "$ORIG_PL1" > "$m/constraint_0_power_limit_uw" 2>/dev/null
     echo "$ORIG_PL2" > "$m/constraint_1_power_limit_uw" 2>/dev/null
     measure "$LOAD_SECS" "before" "$m"
     local base_mhz="$MEAS_MHZ" base_w="$MEAS_W"
+    trap - EXIT INT TERM
   fi
 
   log STEP "Raising MMIO-RAPL limits -> PL1=${TARGET_PL1_W} W  PL2=${TARGET_PL2_W} W"
@@ -272,17 +287,20 @@ do_apply() {
 }
 
 do_restore() {
-  local m p1 p2
+  local m="" p1="" p2=""
   if [ -f "$ORIG_FILE" ]; then
     # shellcheck disable=SC1090
-    . "$ORIG_FILE"; m="$MMIO_PATH"; p1="$ORIG_PL1"; p2="$ORIG_PL2"
-  else
-    m="$(find_mmio_pkg)" || die "no mmio domain"; p1=30000000; p2=30000000
-    log WARN "no saved originals; restoring to 30 W default"
+    . "$ORIG_FILE"; m="${MMIO_PATH:-}"; p1="${ORIG_PL1:-}"; p2="${ORIG_PL2:-}"
   fi
-  echo "$p1" > "$m/constraint_0_power_limit_uw" 2>/dev/null
-  echo "$p2" > "$m/constraint_1_power_limit_uw" 2>/dev/null
-  log OK "restored PL1=$(uw2w "$p1") W  PL2=$(uw2w "$p2") W"
+  # stale/corrupt state (moved sysfs path, non-numeric values): fall back loudly
+  if [ ! -e "$m/constraint_0_power_limit_uw" ] || ! [[ "$p1" =~ ^[0-9]+$ && "$p2" =~ ^[0-9]+$ ]]; then
+    [ -f "$ORIG_FILE" ] && log WARN "saved originals unusable -> falling back to 30 W firmware default" \
+                        || log WARN "no saved originals; restoring to 30 W default"
+    m="$(find_mmio_pkg)" || die "no mmio domain"; p1=30000000; p2=30000000
+  fi
+  # write_limit reads the value back and warns on mismatch (no silent failure)
+  write_limit "$m" 0 "$(( p1 / 1000000 ))"
+  write_limit "$m" 1 "$(( p2 / 1000000 ))"
 }
 
 do_guard() {
@@ -368,6 +386,10 @@ do_sweep() {
 
   # remember the limit we came in with, restore it at the end
   local cur0 cur1; cur0="$(cat "$m/constraint_0_power_limit_uw")"; cur1="$(cat "$m/constraint_1_power_limit_uw")"
+  # Ctrl-C / kill mid-sweep must NOT leave a 160 W step applied with the guard gone:
+  # kill the load and restore the entry limits on any exit path
+  trap 'kill_load; echo "$cur0" > "$m/constraint_0_power_limit_uw" 2>/dev/null; echo "$cur1" > "$m/constraint_1_power_limit_uw" 2>/dev/null; log WARN "sweep interrupted -- entry limits restored"; exit 130' INT TERM
+  trap 'kill_load; echo "$cur0" > "$m/constraint_0_power_limit_uw" 2>/dev/null; echo "$cur1" > "$m/constraint_1_power_limit_uw" 2>/dev/null' EXIT
 
   log STEP "Power sweep: steps=[${SWEEP_STEPS}] W  ${SWEEP_RUNS} run(s)/step  ${SWEEP_WARMUP}s warmup + $(( SWEEP_LOAD - SWEEP_WARMUP ))s measure  abort: 2x>=${MAX_TEMP}C or 1x>=${HARD_TEMP}C  start=$(cpu_temp_c)C"
   log INFO "$(printf '%-8s %-11s %-9s %-8s %s' 'PL1set' 'deliveredW' 'maxTempC' 'avgMHz' 'verdict')"
@@ -420,6 +442,7 @@ do_sweep() {
   done
 
   # restore the entry limits (do not leave the sweep's last step applied)
+  trap - EXIT INT TERM
   echo "$cur0" > "$m/constraint_0_power_limit_uw" 2>>"$LOGFILE" || log WARN "FAILED to restore PL1 -- check $m/constraint_0_power_limit_uw"
   echo "$cur1" > "$m/constraint_1_power_limit_uw" 2>>"$LOGFILE" || log WARN "FAILED to restore PL2"
 
@@ -477,7 +500,7 @@ do_daemon() {
   log STEP "legion-powercapd: poll=${DAEMON_POLL}s  throttle>=${THERMAL_THROTTLE}C  recover<=${THERMAL_RECOVER}C  floor=${THROTTLE_FLOOR}W  sensor=${CPU_SENSOR_TYPE}"
   log INFO "modes: quiet=${MODE_QUIET_PL1}W balanced=${MODE_BALANCED_PL1}W performance=${MODE_PERF_PL1}W  battery-cap=${BATTERY_MAX_PL1}W"
 
-  local last_key="" eff1=0 eff2=0 cur1=0 throttled=0 mode ac temp t1 t2
+  local last_key="" eff1=0 eff2=0 cur1=0 throttled=0 mode ac temp t1 t2 live1 live2 drift_n=0 fb=0
   trap 'log INFO "legion-powercapd stopping"; exit 0' INT TERM
   while :; do
     mode="$(read_mode)"
@@ -504,6 +527,22 @@ do_daemon() {
       log OK "mode=${mode} $([ "$ac" = 1 ] && echo AC || echo BATTERY) -> PL1=${eff1}W PL2=${eff2}W"
     fi
 
+    # firmware/EC can silently reset the registers (resume, EC claw-back) without
+    # the mode/AC key changing — read back and re-assert whenever the live values
+    # differ from what we intend (PL1=cur1 incl. any thermal throttle, PL2=eff2)
+    live1="$(cat "$m/constraint_0_power_limit_uw" 2>/dev/null)"
+    live2="$(cat "$m/constraint_1_power_limit_uw" 2>/dev/null)"
+    if [ "$live1" != "$(w2uw "$cur1")" ] || [ "$live2" != "$(w2uw "$eff2")" ]; then
+      echo "$(w2uw "$cur1")" > "$m/constraint_0_power_limit_uw" 2>/dev/null
+      echo "$(w2uw "$eff2")" > "$m/constraint_1_power_limit_uw" 2>/dev/null
+      drift_n=$(( drift_n + 1 ))
+      # log the first drift and then every 20th, so a constantly-clamping EC
+      # doesn't flood the journal at poll rate
+      if [ "$drift_n" -eq 1 ] || [ $(( drift_n % 20 )) -eq 0 ]; then
+        log WARN "limits drifted (PL1 read $(uw2w "${live1:-}") W, drift #${drift_n}) -> re-applied PL1=${cur1}W PL2=${eff2}W"
+      fi
+    fi
+
     # thermal guard rides on top, never above the current effective target (eff1)
     if temp="$(cpu_temp_c)"; then
       if [ "$temp" -ge "$THERMAL_THROTTLE" ] && [ "$cur1" -gt "$THROTTLE_FLOOR" ]; then
@@ -518,8 +557,16 @@ do_daemon() {
         log OK "thermal ${temp}C <= ${THERMAL_RECOVER}C -> PL1 restored to ${cur1}W"
       fi
     else
-      echo "$(w2uw "$SAFE_PL1")" > "$m/constraint_0_power_limit_uw" 2>/dev/null
-      log WARN "CPU temp unreadable -> holding PL1 at safe ${SAFE_PL1}W"
+      # never RAISE the limit on a sensor failure: hold the LOWEST of the safe
+      # value, the mode target, and the current (possibly throttled) limit —
+      # a sensor glitch during an overheat must not undo the throttle
+      fb=$SAFE_PL1
+      [ "$eff1" -gt 0 ] && [ "$eff1" -lt "$fb" ] && fb=$eff1
+      [ "$cur1" -gt 0 ] && [ "$cur1" -lt "$fb" ] && fb=$cur1
+      echo "$(w2uw "$fb")" > "$m/constraint_0_power_limit_uw" 2>/dev/null
+      [ "$fb" -lt "$eff1" ] && throttled=1
+      cur1=$fb
+      log WARN "CPU temp unreadable -> holding PL1 at ${fb}W (min of safe/mode/current)"
     fi
     sleep "$DAEMON_POLL"
   done
@@ -542,7 +589,7 @@ while [ $# -gt 0 ]; do
     --sweep-load) SWEEP_LOAD="${2:?}"; shift ;;
     --warmup)   SWEEP_WARMUP="${2:?}"; shift ;;
     --runs)     SWEEP_RUNS="${2:?}"; shift ;;
-    -h|--help)  sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help)  awk 'NR>1{ if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
     *)          echo "unknown argument: $1 (try --help)"; exit 2 ;;
   esac
   shift

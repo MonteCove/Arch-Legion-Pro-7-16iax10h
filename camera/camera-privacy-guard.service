@@ -1,6 +1,9 @@
 [Unit]
 Description=Enforce the camera privacy switch by unbinding uvcvideo when privacy=ON
 After=multi-user.target systemd-udevd.service
+# never give up: without this, a slow camera enumeration at boot could burn the
+# default 5-starts-in-10s budget and leave the guard permanently dead
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -10,7 +13,9 @@ RestartSec=2
 NoNewPrivileges=yes
 ProtectHome=yes
 ProtectSystem=strict
-ReadWritePaths=/sys/bus/usb/drivers/uvcvideo
+# '-' = tolerate the dir not existing yet (it appears only when uvcvideo loads;
+# without '-' the unit fails 226/NAMESPACE if started before the camera enumerates)
+ReadWritePaths=-/sys/bus/usb/drivers/uvcvideo
 
 [Install]
 WantedBy=multi-user.target

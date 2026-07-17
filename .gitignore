@@ -13,3 +13,7 @@ state/
 /hypridle.conf
 /notes.txt
 __pycache__/
+# heavy working trees that live next to the repo but must never be committed
+/16iax10h-kernel/
+/legion-pro-7-16iax10h-linux/
+/intel/

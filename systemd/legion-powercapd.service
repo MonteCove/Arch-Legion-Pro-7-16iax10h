@@ -1,11 +1,11 @@
 [Unit]
 Description=Legion Pro 7 16IAX10H power governor (follows Fn-Q mode + thermal guard)
-Documentation=file:///home/monte/raise-power-cap.sh
+Documentation=file:///usr/local/bin/legion-powercap
 After=multi-user.target
 
 [Service]
 Type=simple
-ExecStart=/home/monte/raise-power-cap.sh --daemon
+ExecStart=/usr/local/bin/legion-powercap --daemon
 Restart=always
 RestartSec=5
 # slightly favored scheduling so the thermal guard stays responsive under full load

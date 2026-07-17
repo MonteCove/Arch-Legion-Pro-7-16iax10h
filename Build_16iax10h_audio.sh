@@ -65,7 +65,7 @@ for arg in "$@"; do
     --force) FORCE=1 ;;
     --skip-bootloader) SKIP_BOOTLOADER=1 ;;
     --verify|--test) VERIFY=1 ;;
-    -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) awk 'NR>1{ if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "$0"; exit 0 ;;
     *) die "unknown argument: $arg" ;;
   esac
 done
@@ -378,9 +378,18 @@ fi
 
 step "Building the kernel (this is the long one)"
 export MAKEFLAGS="-j$(nproc)"
-if ls "$SRC"/${CUSTOM_PKGBASE}-*.pkg.tar.zst >/dev/null 2>&1 && [[ $FORCE -eq 0 ]]; then
-  skip "built packages already present in $SRC (use --force to rebuild)"
+# skip only if packages of the CURRENT version exist — after a stock-kernel bump,
+# stale old-version packages must not masquerade as "already built"
+if ls "$SRC"/${CUSTOM_PKGBASE}-*"-${LINUX_FULL}-"*.pkg.tar.zst >/dev/null 2>&1 && [[ $FORCE -eq 0 ]]; then
+  skip "built packages for $LINUX_FULL already present in $SRC (use --force to rebuild)"
 else
+  # clear packages from older versions first, or the install step's glob would
+  # collect both versions and pacman -U would abort on duplicate targets
+  mapfile -t STALE < <(ls "$SRC"/${CUSTOM_PKGBASE}-*.pkg.tar.zst 2>/dev/null | grep -v -- "-${LINUX_FULL}-")
+  if [[ ${#STALE[@]} -ge 1 ]]; then
+    rm -f "${STALE[@]}"
+    ok "removed ${#STALE[@]} stale package(s) from older kernel versions"
+  fi
   mkflags=(-s --noconfirm --cleanbuild)
   [[ $PGP_OK -eq 1 ]] || mkflags+=(--skippgpcheck)
   # If a prior package exists, makepkg refuses to overwrite without its own -f.
@@ -393,11 +402,13 @@ fi
 # Step 6: install kernel + headers
 # ---------------------------------------------------------------------------
 step "Installing kernel and headers"
-if pacman -Q "$CUSTOM_PKGBASE" >/dev/null 2>&1 && [[ $FORCE -eq 0 ]]; then
-  skip "$CUSTOM_PKGBASE already installed (use --force to reinstall)"
+# version-aware skip: "installed" only counts if it's the CURRENT version
+if [[ "$(pacman -Q "$CUSTOM_PKGBASE" 2>/dev/null | awk '{print $2}')" == "$LINUX_FULL" && $FORCE -eq 0 ]]; then
+  skip "$CUSTOM_PKGBASE $LINUX_FULL already installed (use --force to reinstall)"
 else
-  mapfile -t PKGS < <(ls "$SRC"/${CUSTOM_PKGBASE}-*.pkg.tar.zst 2>/dev/null | grep -E "${CUSTOM_PKGBASE}(-headers)?-[0-9]")
-  [[ ${#PKGS[@]} -ge 1 ]] || die "no built packages found to install"
+  mapfile -t PKGS < <(ls "$SRC"/${CUSTOM_PKGBASE}-*.pkg.tar.zst 2>/dev/null \
+    | grep -- "-${LINUX_FULL}-" | grep -E "${CUSTOM_PKGBASE}(-headers)?-[0-9]")
+  [[ ${#PKGS[@]} -ge 1 ]] || die "no built packages for $LINUX_FULL found to install"
   sudo pacman -U --noconfirm "${PKGS[@]}"
   ok "installed: ${PKGS[*]##*/}"
 fi

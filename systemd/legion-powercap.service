@@ -1,13 +1,15 @@
 [Unit]
 Description=Lift Legion Pro 7 16IAX10H sustained CPU power cap (Intel MMIO-RAPL PL1/PL2)
-Documentation=file:///home/monte/raise-power-cap.sh
-# Apply at boot and re-apply after resume from sleep/hibernate
+Documentation=file:///usr/local/bin/legion-powercap
+# Apply at boot and re-apply after resume from sleep/hibernate.
+# No RemainAfterExit: the unit must leave the active state after each run, or the
+# suspend.target activations on later resumes would be no-ops and never re-run it.
+# Do NOT enable together with legion-powercapd.service (the daemon owns the limits).
 After=multi-user.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
 
 [Service]
 Type=oneshot
-RemainAfterExit=yes
-ExecStart=/home/monte/raise-power-cap.sh --no-load --pl1 120 --pl2 150
+ExecStart=/usr/local/bin/legion-powercap --no-load --pl1 120 --pl2 150
 
 [Install]
 WantedBy=multi-user.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target

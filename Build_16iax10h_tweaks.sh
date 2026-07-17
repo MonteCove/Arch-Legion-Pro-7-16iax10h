@@ -520,9 +520,19 @@ mod_hibernate() {
     $SUDO mkinitcpio -P 2>&1 | tee -a "$LOGFILE" | grep -iE 'Building|Image gener|error' || true
   fi
 
-  # 5) add resume= to the GRUB cmdline (idempotent) + regen
-  if grep -q 'resume=' "$GRUB_DEFAULT" 2>/dev/null; then
-    log "skip: resume= already in $GRUB_DEFAULT"
+  # 5) add resume= to the GRUB cmdline (idempotent) + regen. A recreated swapfile
+  #    (--force, or a size bump) lands on new extents: an existing resume= with a
+  #    stale offset writes hibernate images the kernel can never find at boot, so
+  #    "already present" is only a skip when UUID+offset actually match.
+  if grep -q "resume=UUID=${ruuid} resume_offset=${roffset}" "$GRUB_DEFAULT" 2>/dev/null; then
+    log "skip: resume= already correct in $GRUB_DEFAULT"
+  elif grep -q 'resume=' "$GRUB_DEFAULT" 2>/dev/null; then
+    $SUDO sed -i -E "s|resume=UUID=[0-9a-fA-F-]+ resume_offset=[0-9]+|resume=UUID=${ruuid} resume_offset=${roffset}|" "$GRUB_DEFAULT" \
+      || { err "could not update stale resume= in GRUB"; return 1; }
+    grep -q "resume=UUID=${ruuid} resume_offset=${roffset}" "$GRUB_DEFAULT" \
+      || { err "GRUB has a resume= this script does not recognize -- fix $GRUB_DEFAULT by hand (want: resume=UUID=${ruuid} resume_offset=${roffset})"; return 1; }
+    log "updated stale resume= -> UUID=${ruuid} offset=${roffset}"
+    regen_grub
   else
     $SUDO sed -i "s|\(GRUB_CMDLINE_LINUX_DEFAULT=\"\)|\1resume=UUID=${ruuid} resume_offset=${roffset} |" "$GRUB_DEFAULT" \
       || { err "could not add resume= to GRUB"; return 1; }
@@ -890,7 +900,7 @@ do_verify() {
 
   # hibernation (prevents silent battery death)
   local has_realswap=0
-  awk '$1!~/zram/{f=1} END{exit !f}' /proc/swaps 2>/dev/null && has_realswap=1
+  awk 'NR>1 && $1!~/zram/{f=1} END{exit !f}' /proc/swaps 2>/dev/null && has_realswap=1
   if [ "$has_realswap" = 1 ] && grep -q 'resume=' /proc/cmdline 2>/dev/null; then
     vok "hibernation ready (real swap + resume= on cmdline)"
   elif grep -q 'resume=' "$GRUB_DEFAULT" 2>/dev/null && [ -f "$SWAPFILE" ]; then

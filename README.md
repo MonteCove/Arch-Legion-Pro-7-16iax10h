@@ -229,6 +229,7 @@ cleanliness, not a hard dependency.
 ./Build_16iax10h_audio.sh
 
 # --- 2. Make the audio kernel your default boot, then reboot into it ---
+sudo sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT=saved/' /etc/default/grub   # SAVEDEFAULT only works with DEFAULT=saved
 grep -q '^GRUB_SAVEDEFAULT=' /etc/default/grub || echo 'GRUB_SAVEDEFAULT=true' | sudo tee -a /etc/default/grub
 sudo grub-mkconfig -o /boot/grub/grub.cfg
 sudo reboot                       # at the menu, pick "Arch Linux (16IAX10H Audio)" once

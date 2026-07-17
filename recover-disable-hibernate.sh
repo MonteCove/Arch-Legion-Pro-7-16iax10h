@@ -27,9 +27,11 @@ fi
 
 say "2. Restore the pre-hibernate initramfs config (puts nvidia back in early KMS, the known-good setup)"
 if [ -f "$BAK" ]; then
+  say "   backup is from $(date -r "$BAK" '+%Y-%m-%d %H:%M') -- changes made to $MKI since then are discarded:"
+  diff -u "$BAK" "$MKI" | sed 's/^/      /' || true
   cp "$MKI" "$MKI.bak-hibernate-state"
   cp "$BAK" "$MKI"
-  ok "restored $MKI from $BAK"
+  ok "restored $MKI from $BAK (previous state kept at $MKI.bak-hibernate-state)"
   grep -E '^MODULES=|^HOOKS=' "$MKI" | sed 's/^/      /'
 else
   warn "backup $BAK missing -- ensuring nvidia is in early KMS + dropping resume hook manually"
@@ -48,9 +50,27 @@ say "4. Keep the swapfile as plain swap (harmless), but it is NO LONGER a resume
 ok "swap stays active: $(swapon --show=NAME,SIZE --noheadings 2>/dev/null | tr '\n' ' ')"
 warn "to also remove the 36G swapfile entirely: swapoff /swap/swapfile && sed -i '\\|/swap/swapfile|d' /etc/fstab && btrfs subvolume delete /swap"
 
-say "5. Rebuild initramfs + regenerate GRUB"
-mkinitcpio -P 2>&1 | grep -iE 'Building|Image gener|ERROR' || warn "mkinitcpio had issues -- read its output above"
-grub-mkconfig -o /boot/grub/grub.cfg 2>&1 | grep -iE 'Found|done|error' | tail -5
+say "5. Rebuild initramfs + regenerate GRUB (hard-fail: this IS the recovery -- a silent failure defeats it)"
+MKOUT="$(mktemp)"
+if mkinitcpio -P >"$MKOUT" 2>&1; then
+  grep -iE 'Image gener' "$MKOUT" | tail -3
+  ok "initramfs rebuilt"
+else
+  tail -20 "$MKOUT"
+  printf '\033[0;31m!!! mkinitcpio FAILED -- recovery is NOT complete; the current initramfs is unchanged. Fix the error above and re-run.\033[0m\n'
+  rm -f "$MKOUT"; exit 1
+fi
+rm -f "$MKOUT"
+GROUT="$(mktemp)"
+if grub-mkconfig -o /boot/grub/grub.cfg >"$GROUT" 2>&1; then
+  grep -iE 'Found linux' "$GROUT" | tail -3
+  ok "grub.cfg regenerated"
+else
+  tail -10 "$GROUT"
+  printf '\033[0;31m!!! grub-mkconfig FAILED -- recovery is NOT complete; grub.cfg may still carry resume=. Fix and re-run.\033[0m\n'
+  rm -f "$GROUT"; exit 1
+fi
+rm -f "$GROUT"
 
 say "6. (battery-guard is safe) it auto-detects no resume= and will cleanly POWER OFF at 5% instead of hibernating"
 ok "no action needed -- 16iax10h-battery-guard.sh already falls back to poweroff when resume= is absent"
@@ -59,4 +79,4 @@ echo
 say "DONE. Reboot normally (no special cmdline needed):  sudo reboot"
 say "After reboot you should land at the SDDM login screen again. If the greeter STILL"
 say "crashes, that is a separate issue -- boot once more with 'systemd.unit=multi-user.target',"
-say "log in on the TTY, and run:  ~/Arch/recover-disable-hibernate.sh --greeter-help  (see notes)"
+say "log in on the TTY, and check:  journalctl -b -u sddm  (greeter crashes log there)"
